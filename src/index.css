@@ -1,0 +1,31 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@400;500;600;700&display=swap');
+
+:root {
+  --paper-100: #f6f9fc;
+  --paper-200: #edf2f8;
+  --line-300: #c7d5e3;
+  --line-700: #3a5b8d;
+  --ink-900: #14233a;
+  --ink-700: #46607d;
+  --ui-font: 'Sora', sans-serif;
+  --mono-font: 'IBM Plex Mono', monospace;
+
+  font-family: var(--ui-font);
+  color: var(--ink-900);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+#root {
+  min-height: 100vh;
+}
