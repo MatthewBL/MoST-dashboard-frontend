@@ -57,15 +57,62 @@ async function loadEnv() {
   }
 }
 
-function buildConfig(values) {
+function parsePortToken(token) {
+  const numeric = Number(String(token || '').trim())
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    return null
+  }
+  return numeric
+}
+
+function buildPortList(values, fallbackPort) {
+  const listRaw = values.REMOTE_TUNNEL_PORTS || ''
+  const fromList = listRaw
+    .split(',')
+    .map((item) => parsePortToken(item))
+    .filter(Boolean)
+
+  if (fromList.length > 0) {
+    return [...new Set(fromList)]
+  }
+
+  const single = parsePortToken(values.REMOTE_TUNNEL_PORT)
+  if (single !== null) {
+    return [single]
+  }
+
+  return [fallbackPort]
+}
+
+function buildApiBaseByPort(apiBaseUrl, ports) {
+  try {
+    const parsed = new URL(apiBaseUrl)
+    const entries = {}
+
+    for (const port of ports) {
+      const perPort = new URL(parsed.toString())
+      perPort.port = String(port)
+      entries[port] = perPort.toString().replace(/\/$/, '')
+    }
+
+    return entries
+  } catch {
+    return Object.fromEntries(ports.map((port) => [port, `http://localhost:${port}`]))
+  }
+}
+
+function buildBaseConfig(values) {
   const apiBaseUrl = values.VITE_API_BASE_URL || 'http://localhost:4000'
-  let localPort = 4000
+  let fallbackPort = 4000
 
   try {
-    localPort = Number(new URL(apiBaseUrl).port || 80)
+    fallbackPort = Number(new URL(apiBaseUrl).port || 4000)
   } catch {
-    localPort = Number(values.LOCAL_TUNNEL_PORT || 4000)
+    fallbackPort = parsePortToken(values.LOCAL_TUNNEL_PORT) || 4000
   }
+
+  const ports = buildPortList(values, fallbackPort)
+  const apiBaseByPort = buildApiBaseByPort(apiBaseUrl, ports)
 
   const remoteHost = values.REMOTE_TUNNEL_HOST || ''
   const remoteUser = values.REMOTE_TUNNEL_USER || ''
@@ -87,11 +134,10 @@ function buildConfig(values) {
   }
 
   return {
-    apiBaseUrl,
+    ports,
+    apiBaseByPort,
     localBind: values.LOCAL_TUNNEL_BIND || '127.0.0.1',
-    localPort,
     remoteHost,
-    remotePort: Number(values.REMOTE_TUNNEL_PORT || localPort),
     remoteTargetHost,
     remoteUser,
     remoteGateway,
@@ -129,24 +175,30 @@ function splitExtraArgs(value) {
     .filter(Boolean)
 }
 
-const state = {
-  child: null,
-  running: false,
-  startedAt: null,
-  lastExitCode: null,
-  lastSignal: null,
-  lastError: '',
-  lastStderr: '',
-  restartTimer: null,
+function createTunnelState() {
+  return {
+    child: null,
+    running: false,
+    startedAt: null,
+    lastExitCode: null,
+    lastSignal: null,
+    lastError: '',
+    lastStderr: '',
+    restartTimer: null,
+    restartCount: 0,
+  }
+}
+
+const managerState = {
   stopping: false,
-  restartCount: 0,
 }
 
 let config
+const tunnels = new Map()
 
-async function checkApiHealth() {
+async function checkApiHealth(tunnel) {
   try {
-    const target = new URL('/health', config.apiBaseUrl).toString()
+    const target = new URL('/health', tunnel.apiBaseUrl).toString()
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 2500)
     const response = await fetch(target, { signal: controller.signal })
@@ -163,9 +215,9 @@ async function checkApiHealth() {
   }
 }
 
-function buildSshArgs() {
+function buildSshArgs(tunnel) {
   const host = formatHost(config)
-  const forward = `${config.localBind}:${config.localPort}:${config.remoteTargetHost}:${config.remotePort}`
+  const forward = `${config.localBind}:${tunnel.localPort}:${config.remoteTargetHost}:${tunnel.remotePort}`
 
   const args = ['-N', '-o', 'ExitOnForwardFailure=yes', '-L', forward]
 
@@ -183,113 +235,170 @@ function buildSshArgs() {
   return args
 }
 
-function scheduleRestart(reason) {
-  if (state.restartTimer || state.stopping) {
+function scheduleRestart(tunnel, reason) {
+  if (tunnel.state.restartTimer || managerState.stopping) {
     return
   }
 
-  state.restartTimer = setTimeout(() => {
-    state.restartTimer = null
-    startTunnel(`auto-restart:${reason}`)
+  tunnel.state.restartTimer = setTimeout(() => {
+    tunnel.state.restartTimer = null
+    startTunnel(tunnel, `auto-restart:${reason}`)
   }, 3000)
 }
 
-function stopCurrentTunnel() {
-  if (!state.child) {
+function stopTunnel(tunnel) {
+  if (!tunnel.state.child) {
     return
   }
 
-  const child = state.child
+  const child = tunnel.state.child
   child.kill('SIGTERM')
 
   setTimeout(() => {
-    if (state.child && state.child.pid === child.pid) {
+    if (tunnel.state.child && tunnel.state.child.pid === child.pid) {
       child.kill('SIGKILL')
     }
   }, 2000)
 }
 
-function startTunnel(source) {
+function startTunnel(tunnel, source) {
   if (!config.remoteTargetHost) {
-    state.lastError = 'REMOTE_TUNNEL_HOST or REMOTE_TUNNEL_TARGET_HOST is required in .env.'
-    state.running = false
+    tunnel.state.lastError = 'REMOTE_TUNNEL_HOST or REMOTE_TUNNEL_TARGET_HOST is required in .env.'
+    tunnel.state.running = false
     return
   }
 
   const destination = formatHost(config)
   if (!destination) {
-    state.lastError = 'SSH destination is missing. Set REMOTE_TUNNEL_USER and REMOTE_TUNNEL_GATEWAY, or REMOTE_TUNNEL_DESTINATION.'
-    state.running = false
+    tunnel.state.lastError = 'SSH destination is missing. Set REMOTE_TUNNEL_USER and REMOTE_TUNNEL_GATEWAY, or REMOTE_TUNNEL_DESTINATION.'
+    tunnel.state.running = false
     return
   }
 
-  if (state.child) {
+  if (tunnel.state.child) {
     return
   }
 
-  const args = buildSshArgs()
+  const args = buildSshArgs(tunnel)
 
-  console.log(`[ssh:${source}] ssh ${args.join(' ')}`)
+  console.log(`[ssh:${tunnel.port}:${source}] ssh ${args.join(' ')}`)
 
-  state.lastError = ''
-  state.lastStderr = ''
-  state.running = true
-  state.startedAt = new Date().toISOString()
+  tunnel.state.lastError = ''
+  tunnel.state.lastStderr = ''
+  tunnel.state.running = true
+  tunnel.state.startedAt = new Date().toISOString()
 
   const child = spawn('ssh', args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   })
 
-  state.child = child
+  tunnel.state.child = child
 
   child.stdout.on('data', (chunk) => {
     const text = String(chunk)
-    process.stdout.write(`[ssh:${source}] ${text}`)
+    process.stdout.write(`[ssh:${tunnel.port}:${source}] ${text}`)
   })
 
   child.stderr.on('data', (chunk) => {
     const text = String(chunk).trim()
     if (text) {
-      state.lastStderr = text
-      process.stderr.write(`[ssh:${source}] ${text}\n`)
+      tunnel.state.lastStderr = text
+      process.stderr.write(`[ssh:${tunnel.port}:${source}] ${text}\n`)
     }
   })
 
   child.on('error', (error) => {
-    state.running = false
-    state.lastError = error.message
-    state.child = null
-    scheduleRestart('spawn-error')
+    tunnel.state.running = false
+    tunnel.state.lastError = error.message
+    tunnel.state.child = null
+    scheduleRestart(tunnel, 'spawn-error')
   })
 
   child.on('exit', (code, signal) => {
-    state.running = false
-    state.lastExitCode = code
-    state.lastSignal = signal
-    state.child = null
+    tunnel.state.running = false
+    tunnel.state.lastExitCode = code
+    tunnel.state.lastSignal = signal
+    tunnel.state.child = null
 
-    if (!state.stopping) {
-      state.restartCount += 1
-      scheduleRestart('exit')
+    if (!managerState.stopping) {
+      tunnel.state.restartCount += 1
+      scheduleRestart(tunnel, 'exit')
     }
   })
 }
 
-async function restartTunnel() {
-  if (state.restartTimer) {
-    clearTimeout(state.restartTimer)
-    state.restartTimer = null
+async function restartTunnel(tunnel) {
+  if (tunnel.state.restartTimer) {
+    clearTimeout(tunnel.state.restartTimer)
+    tunnel.state.restartTimer = null
   }
 
-  stopCurrentTunnel()
+  stopTunnel(tunnel)
 
   const startedAt = Date.now()
-  while (state.child && Date.now() - startedAt < 4000) {
+  while (tunnel.state.child && Date.now() - startedAt < 4000) {
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
 
-  startTunnel('manual-restart')
+  startTunnel(tunnel, 'manual-restart')
+}
+
+function serializeTunnel(tunnel, apiHealth) {
+  return {
+    port: tunnel.port,
+    running: tunnel.state.running,
+    pid: tunnel.state.child?.pid || null,
+    startedAt: tunnel.state.startedAt,
+    lastExitCode: tunnel.state.lastExitCode,
+    lastSignal: tunnel.state.lastSignal,
+    lastError: tunnel.state.lastError,
+    lastStderr: tunnel.state.lastStderr,
+    restartCount: tunnel.state.restartCount,
+    apiHealth,
+    config: {
+      apiBaseUrl: tunnel.apiBaseUrl,
+      localBind: config.localBind,
+      localPort: tunnel.localPort,
+      remoteHost: config.remoteHost,
+      remoteTargetHost: config.remoteTargetHost,
+      sshDestination: formatHost(config),
+      remotePort: tunnel.remotePort,
+    },
+  }
+}
+
+function getRequestedPort(urlObject) {
+  const fromPath = /^\/status\/(\d+)$/.exec(urlObject.pathname) || /^\/restart\/(\d+)$/.exec(urlObject.pathname)
+  if (fromPath) {
+    return parsePortToken(fromPath[1])
+  }
+
+  const fromQuery = parsePortToken(urlObject.searchParams.get('port'))
+  return fromQuery
+}
+
+async function readJsonBody(req) {
+  return new Promise((resolve) => {
+    const chunks = []
+
+    req.on('data', (chunk) => chunks.push(chunk))
+    req.on('end', () => {
+      if (chunks.length === 0) {
+        resolve({})
+        return
+      }
+
+      try {
+        const value = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        resolve(value && typeof value === 'object' ? value : {})
+      } catch {
+        resolve({})
+      }
+    })
+
+    req.on('error', () => resolve({}))
+  })
 }
 
 function jsonResponse(res, statusCode, payload) {
@@ -302,43 +411,72 @@ function jsonResponse(res, statusCode, payload) {
 }
 
 async function requestHandler(req, res) {
+  const urlObject = new URL(req.url || '/', 'http://localhost')
+
   if (req.method === 'OPTIONS') {
     jsonResponse(res, 204, {})
     return
   }
 
-  if (req.method === 'GET' && req.url === '/status') {
-    const apiHealth = await checkApiHealth()
+  if (req.method === 'GET' && (urlObject.pathname === '/status' || /^\/status\/\d+$/.test(urlObject.pathname))) {
+    const requestedPort = getRequestedPort(urlObject)
+
+    if (requestedPort !== null) {
+      const tunnel = tunnels.get(requestedPort)
+      if (!tunnel) {
+        jsonResponse(res, 404, { error: `Tunnel for port ${requestedPort} not configured.` })
+        return
+      }
+
+      const apiHealth = await checkApiHealth(tunnel)
+      jsonResponse(res, 200, serializeTunnel(tunnel, apiHealth))
+      return
+    }
+
+    const tunnelStatuses = await Promise.all(
+      [...tunnels.values()].map(async (tunnel) => {
+        const apiHealth = await checkApiHealth(tunnel)
+        return serializeTunnel(tunnel, apiHealth)
+      }),
+    )
+
     jsonResponse(res, 200, {
-      running: state.running,
-      pid: state.child?.pid || null,
-      startedAt: state.startedAt,
-      lastExitCode: state.lastExitCode,
-      lastSignal: state.lastSignal,
-      lastError: state.lastError,
-      lastStderr: state.lastStderr,
-      restartCount: state.restartCount,
-      apiHealth,
-      config: {
-        apiBaseUrl: config.apiBaseUrl,
-        localBind: config.localBind,
-        localPort: config.localPort,
-        remoteHost: config.remoteHost,
-        remoteTargetHost: config.remoteTargetHost,
-        sshDestination: formatHost(config),
-        remotePort: config.remotePort,
-      },
+      ports: config.ports,
+      tunnels: tunnelStatuses,
     })
     return
   }
 
-  if (req.method === 'POST' && req.url === '/restart') {
-    await restartTunnel()
-    jsonResponse(res, 200, { ok: true, message: 'Tunnel restart requested.' })
+  if (req.method === 'POST' && (urlObject.pathname === '/restart' || /^\/restart\/\d+$/.test(urlObject.pathname))) {
+    const body = await readJsonBody(req)
+    const fromBody = parsePortToken(body?.port)
+    const requestedPort = getRequestedPort(urlObject) ?? fromBody
+
+    if (requestedPort !== null) {
+      const tunnel = tunnels.get(requestedPort)
+      if (!tunnel) {
+        jsonResponse(res, 404, { error: `Tunnel for port ${requestedPort} not configured.` })
+        return
+      }
+
+      await restartTunnel(tunnel)
+      jsonResponse(res, 200, { ok: true, message: `Tunnel ${requestedPort} restart requested.`, port: requestedPort })
+      return
+    }
+
+    const defaultPort = config.ports[0]
+    const tunnel = tunnels.get(defaultPort)
+    if (!tunnel) {
+      jsonResponse(res, 500, { error: 'No tunnel is configured.' })
+      return
+    }
+
+    await restartTunnel(tunnel)
+    jsonResponse(res, 200, { ok: true, message: `Tunnel ${defaultPort} restart requested.`, port: defaultPort })
     return
   }
 
-  if (req.method === 'GET' && req.url === '/health') {
+  if (req.method === 'GET' && urlObject.pathname === '/health') {
     jsonResponse(res, 200, { ok: true, service: 'tunnel-manager' })
     return
   }
@@ -349,9 +487,20 @@ async function requestHandler(req, res) {
 async function main() {
   const fileEnv = await loadEnv()
   const mergedEnv = { ...fileEnv, ...process.env }
-  config = buildConfig(mergedEnv)
+  config = buildBaseConfig(mergedEnv)
 
-  startTunnel('startup')
+  for (const port of config.ports) {
+    const tunnel = {
+      port,
+      localPort: port,
+      remotePort: port,
+      apiBaseUrl: config.apiBaseByPort[port],
+      state: createTunnelState(),
+    }
+
+    tunnels.set(port, tunnel)
+    startTunnel(tunnel, 'startup')
+  }
 
   const server = http.createServer((req, res) => {
     requestHandler(req, res).catch((error) => {
@@ -363,16 +512,21 @@ async function main() {
 
   server.listen(config.managerPort, () => {
     console.log(`Tunnel manager listening on http://localhost:${config.managerPort}`)
+    console.log(`Managed ports: ${config.ports.join(', ')}`)
   })
 
   const shutdown = () => {
-    state.stopping = true
-    if (state.restartTimer) {
-      clearTimeout(state.restartTimer)
-      state.restartTimer = null
+    managerState.stopping = true
+
+    for (const tunnel of tunnels.values()) {
+      if (tunnel.state.restartTimer) {
+        clearTimeout(tunnel.state.restartTimer)
+        tunnel.state.restartTimer = null
+      }
+
+      stopTunnel(tunnel)
     }
 
-    stopCurrentTunnel()
     server.close(() => process.exit(0))
   }
 

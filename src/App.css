@@ -42,12 +42,15 @@
   margin: 0 1rem 0.9rem;
   border-radius: 12px;
   border: 1px solid var(--line-300);
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: center;
+  display: grid;
+  gap: 0.75rem;
   padding: 0.65rem 0.85rem;
   background: rgba(255, 255, 255, 0.85);
+}
+
+.tunnel-strip-header {
+  display: grid;
+  gap: 0.2rem;
 }
 
 .tunnel-strip strong {
@@ -59,6 +62,51 @@
   color: var(--ink-700);
   font-size: 0.75rem;
   font-family: var(--mono-font);
+}
+
+.tunnel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0.65rem;
+}
+
+.tunnel-card {
+  border: 1px solid var(--line-300);
+  border-radius: 10px;
+  padding: 0.55rem;
+  background: rgba(255, 255, 255, 0.92);
+  display: grid;
+  gap: 0.45rem;
+}
+
+.tunnel-card-meta {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.tunnel-card-meta p {
+  margin: 0;
+}
+
+.tunnel-card-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.tunnel-toggle {
+  border: 1px solid var(--line-300);
+  border-radius: 9px;
+  background: #ffffff;
+  color: var(--ink-900);
+  padding: 0.4rem 0.65rem;
+  cursor: pointer;
+  font-family: var(--ui-font);
+}
+
+.tunnel-toggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .tunnel-strip[data-tone='ok'] {
@@ -92,6 +140,18 @@
 .tunnel-refresh:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.tunnel-card[data-tone='ok'] {
+  border-color: rgba(11, 146, 84, 0.45);
+}
+
+.tunnel-card[data-tone='warn'] {
+  border-color: rgba(183, 117, 10, 0.45);
+}
+
+.tunnel-card[data-tone='down'] {
+  border-color: rgba(201, 60, 60, 0.42);
 }
 
 .dashboard-main {

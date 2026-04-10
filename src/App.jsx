@@ -16,6 +16,7 @@ import './App.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000'
 const TUNNEL_MANAGER_URL = import.meta.env.VITE_TUNNEL_MANAGER_URL || 'http://localhost:4100'
+const API_PORTS_RAW = import.meta.env.VITE_API_PORTS || ''
 const EXPERIMENT_LIST_RAW =
   import.meta.env.VITE_EXPERIMENT_LIST || import.meta.env.EXPERIMENT_LIST || ''
 
@@ -55,6 +56,39 @@ const LARGEST_TRUE_KEYS = [
   'largestTrue',
   'CURRENT_LARGEST_TRUE',
 ]
+
+function parsePortToken(token) {
+  const numeric = Number(String(token || '').trim())
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    return null
+  }
+
+  return numeric
+}
+
+function buildConfiguredApiPorts(rawPorts, fallbackApiBaseUrl) {
+  const fromEnv = rawPorts
+    .split(',')
+    .map((item) => parsePortToken(item))
+    .filter(Boolean)
+
+  if (fromEnv.length > 0) {
+    return [...new Set(fromEnv)]
+  }
+
+  try {
+    const fallbackPort = parsePortToken(new URL(fallbackApiBaseUrl).port || '4000')
+    if (fallbackPort !== null) {
+      return [fallbackPort]
+    }
+  } catch {
+    // Keep default list when URL parsing fails.
+  }
+
+  return [4000]
+}
+
+const CONFIGURED_API_PORTS = buildConfiguredApiPorts(API_PORTS_RAW, API_BASE_URL)
 
 function getFieldValue(row, keys) {
   if (!row) {
@@ -126,8 +160,18 @@ function formatSuccessRate(value) {
   return `${numeric}%`
 }
 
-function buildApiUrl(pathname) {
-  return `${API_BASE_URL}${pathname}`
+function buildApiBaseUrlForPort(port) {
+  try {
+    const url = new URL(API_BASE_URL)
+    url.port = String(port)
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return `http://localhost:${port}`
+  }
+}
+
+function buildApiUrl(pathname, port) {
+  return `${buildApiBaseUrlForPort(port)}${pathname}`
 }
 
 function buildTunnelUrl(pathname) {
@@ -228,17 +272,17 @@ function getHeatmapColor(value, min, max) {
   return `rgb(${r}, ${g}, ${b})`
 }
 
-async function fetchJson(pathname) {
-  const response = await fetch(buildApiUrl(pathname))
+async function fetchJson(pathname, port) {
+  const response = await fetch(buildApiUrl(pathname, port))
   if (!response.ok) {
     throw new Error(`Request failed (${response.status}) for ${pathname}`)
   }
   return response.json()
 }
 
-async function fetchExperimentIterations(experimentName) {
+async function fetchExperimentIterations(experimentName, port) {
   const response = await fetch(
-    buildApiUrl(`/api/experiments/${encodeURIComponent(experimentName)}/iterations`),
+    buildApiUrl(`/api/experiments/${encodeURIComponent(experimentName)}/iterations`, port),
   )
 
   if (!response.ok) {
@@ -321,6 +365,7 @@ function IterationSummary({ point }) {
 
 function App() {
   const chartWrapperRef = useRef(null)
+  const [activeApiPort, setActiveApiPort] = useState(CONFIGURED_API_PORTS[0])
   const [headerData, setHeaderData] = useState({ llm: 'Loading...', gpu: 'Loading...' })
   const [experiments, setExperiments] = useState([])
   const [selectedExperiment, setSelectedExperiment] = useState('')
@@ -333,15 +378,13 @@ function App() {
   const [busyExperimentDownload, setBusyExperimentDownload] = useState('')
   const [experimentStatuses, setExperimentStatuses] = useState({})
   const [loadingMatrixStatus, setLoadingMatrixStatus] = useState(false)
-  const [tunnelInfo, setTunnelInfo] = useState({
+  const [tunnelState, setTunnelState] = useState({
     loading: true,
     reachable: false,
-    running: false,
-    apiOk: false,
-    apiMessage: 'Checking...',
-    config: null,
+    tunnels: [],
+    message: 'Checking...',
   })
-  const [tunnelBusy, setTunnelBusy] = useState(false)
+  const [tunnelBusyByPort, setTunnelBusyByPort] = useState({})
 
   useEffect(() => {
     let isMounted = true
@@ -358,26 +401,39 @@ function App() {
           return
         }
 
-        setTunnelInfo({
+        const tunnels = Array.isArray(data.tunnels)
+          ? data.tunnels
+          : data.config
+            ? [
+                {
+                  port: data.config.localPort,
+                  running: Boolean(data.running),
+                  apiHealth: data.apiHealth || { ok: false, message: 'Unknown status' },
+                  config: data.config,
+                },
+              ]
+            : []
+
+        setTunnelState({
           loading: false,
           reachable: true,
-          running: Boolean(data.running),
-          apiOk: Boolean(data.apiHealth?.ok),
-          apiMessage: data.apiHealth?.message || 'Unknown status',
-          config: data.config || null,
+          tunnels,
+          message: 'Tunnel manager online.',
         })
+
+        if (tunnels.length > 0 && !tunnels.some((entry) => entry.port === activeApiPort)) {
+          setActiveApiPort(tunnels[0].port)
+        }
       } catch {
         if (!isMounted) {
           return
         }
 
-        setTunnelInfo({
+        setTunnelState({
           loading: false,
           reachable: false,
-          running: false,
-          apiOk: false,
-          apiMessage: 'Tunnel manager is offline.',
-          config: null,
+          tunnels: [],
+          message: 'Tunnel manager is offline.',
         })
       }
     }
@@ -389,14 +445,14 @@ function App() {
       isMounted = false
       clearInterval(timer)
     }
-  }, [])
+  }, [activeApiPort])
 
   useEffect(() => {
     async function loadHeader() {
       try {
         const [llmResponse, gpuResponse] = await Promise.all([
-          fetchJson('/api/llm-name'),
-          fetchJson('/api/gpu-used'),
+          fetchJson('/api/llm-name', activeApiPort),
+          fetchJson('/api/gpu-used', activeApiPort),
         ])
 
         setHeaderData({
@@ -410,15 +466,19 @@ function App() {
 
     async function loadExperiments() {
       try {
-        const data = await fetchJson('/api/experiments')
+        const data = await fetchJson('/api/experiments', activeApiPort)
         const apiList = data.experiments || []
         const configuredList = buildConfiguredExperimentList(EXPERIMENT_LIST_RAW)
         const matrixList = configuredList.length > 0 ? configuredList : apiList
 
         setExperiments(matrixList)
-        if (matrixList.length > 0) {
-          setSelectedExperiment(matrixList[0])
-        }
+        setSelectedExperiment((previous) => {
+          if (matrixList.length === 0) {
+            return ''
+          }
+
+          return matrixList.includes(previous) ? previous : matrixList[0]
+        })
       } catch {
         setErrorMessage('Unable to load experiments from API.')
       }
@@ -426,7 +486,7 @@ function App() {
 
     loadHeader()
     loadExperiments()
-  }, [])
+  }, [activeApiPort])
 
   useEffect(() => {
     if (experiments.length === 0) {
@@ -443,7 +503,7 @@ function App() {
         const statuses = await Promise.all(
           experiments.map(async (experiment) => {
             try {
-              const iterations = await fetchExperimentIterations(experiment)
+              const iterations = await fetchExperimentIterations(experiment, activeApiPort)
               if (iterations.length === 0) {
                 return [
                   experiment,
@@ -458,6 +518,7 @@ function App() {
               const latestIteration = iterations[iterations.length - 1]
               const csv = await fetchJson(
                 `/api/experiments/${encodeURIComponent(experiment)}/iterations/${encodeURIComponent(latestIteration)}/results.csv`,
+                activeApiPort,
               )
 
               const rows = csv.rows || []
@@ -512,7 +573,7 @@ function App() {
     return () => {
       isCancelled = true
     }
-  }, [experiments])
+  }, [experiments, activeApiPort])
 
   useEffect(() => {
     if (!selectedExperiment) {
@@ -524,7 +585,7 @@ function App() {
       setErrorMessage('')
 
       try {
-        const iterations = await fetchExperimentIterations(selectedExperiment)
+        const iterations = await fetchExperimentIterations(selectedExperiment, activeApiPort)
 
         if (iterations.length === 0) {
           setIterationData([])
@@ -537,6 +598,7 @@ function App() {
           iterations.map(async (iterationName, index) => {
             const csv = await fetchJson(
               `/api/experiments/${encodeURIComponent(selectedExperiment)}/iterations/${encodeURIComponent(iterationName)}/results.csv`,
+              activeApiPort,
             )
 
             const firstRow = csv.rows?.[0] || {}
@@ -575,14 +637,14 @@ function App() {
         setIterationData([])
         setSelectedIteration('')
         setSelectedIterationRows([])
-        setErrorMessage(`Unable to load iteration data for ${selectedExperiment}.`)
+        setErrorMessage(`Unable to load iteration data for ${selectedExperiment} on port ${activeApiPort}.`)
       } finally {
         setLoadingIterations(false)
       }
     }
 
     loadExperimentData()
-  }, [selectedExperiment])
+  }, [selectedExperiment, activeApiPort])
 
   const selectedPoint = useMemo(
     () => iterationData.find((point) => point.iteration === selectedIteration) || null,
@@ -719,7 +781,7 @@ function App() {
 
     try {
       const endpoint = `/api/experiments/${encodeURIComponent(selectedExperiment)}/iterations/${encodeURIComponent(selectedIteration)}/download/${fileType}`
-      const response = await fetch(buildApiUrl(endpoint))
+      const response = await fetch(buildApiUrl(endpoint, activeApiPort))
       if (!response.ok) {
         throw new Error('Download failed.')
       }
@@ -727,7 +789,7 @@ function App() {
       const blob = await response.blob()
       saveAs(blob, `${selectedExperiment}-${selectedIteration}-${fileType}`)
     } catch {
-      setErrorMessage(`Unable to download ${fileType} for ${selectedIteration}.`)
+      setErrorMessage(`Unable to download ${fileType} for ${selectedIteration} on port ${activeApiPort}.`)
     }
   }
 
@@ -736,13 +798,16 @@ function App() {
     setErrorMessage('')
 
     try {
-      const iterationResponse = await fetchJson(`/api/experiments/${encodeURIComponent(experiment)}/iterations`)
+      const iterationResponse = await fetchJson(
+        `/api/experiments/${encodeURIComponent(experiment)}/iterations`,
+        activeApiPort,
+      )
       const iterations = iterationResponse.iterations || []
       const zip = new JSZip()
 
       for (const iterationName of iterations) {
         const endpoint = `/api/experiments/${encodeURIComponent(experiment)}/iterations/${encodeURIComponent(iterationName)}/download/results.csv`
-        const response = await fetch(buildApiUrl(endpoint))
+        const response = await fetch(buildApiUrl(endpoint, activeApiPort))
         if (!response.ok) {
           continue
         }
@@ -754,49 +819,75 @@ function App() {
       const zipBlob = await zip.generateAsync({ type: 'blob' })
       saveAs(zipBlob, `${experiment}-iterations-results-csv.zip`)
     } catch {
-      setErrorMessage(`Unable to build zip for ${experiment}.`)
+      setErrorMessage(`Unable to build zip for ${experiment} on port ${activeApiPort}.`)
     } finally {
       setBusyExperimentDownload('')
     }
   }
 
-  async function restartTunnel() {
-    setTunnelBusy(true)
+  async function restartTunnel(port) {
+    setTunnelBusyByPort((previous) => ({ ...previous, [port]: true }))
 
     try {
       const response = await fetch(buildTunnelUrl('/restart'), {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ port }),
       })
 
       if (!response.ok) {
         throw new Error('Restart failed.')
       }
     } catch {
-      setErrorMessage('Unable to restart SSH tunnel from dashboard.')
+      setErrorMessage(`Unable to restart SSH tunnel for port ${port}.`)
     } finally {
-      setTunnelBusy(false)
+      setTunnelBusyByPort((previous) => ({ ...previous, [port]: false }))
     }
   }
 
-  const tunnelState = useMemo(() => {
-    if (tunnelInfo.loading) {
-      return { label: 'Checking tunnel...', tone: 'neutral' }
-    }
+  const activeTunnelInfo = useMemo(
+    () => tunnelState.tunnels.find((entry) => entry.port === activeApiPort) || null,
+    [tunnelState.tunnels, activeApiPort],
+  )
 
-    if (!tunnelInfo.reachable) {
-      return { label: 'Tunnel manager offline', tone: 'down' }
-    }
+  const visiblePorts = useMemo(() => {
+    const merged = [...CONFIGURED_API_PORTS, ...tunnelState.tunnels.map((entry) => entry.port)]
+    return [...new Set(merged)]
+  }, [tunnelState.tunnels])
 
-    if (tunnelInfo.running && tunnelInfo.apiOk) {
-      return { label: 'Tunnel active', tone: 'ok' }
+  function getTunnelTone(tunnel) {
+    if (!tunnelState.reachable) {
+      return 'down'
     }
-
-    if (tunnelInfo.running && !tunnelInfo.apiOk) {
-      return { label: 'Tunnel running, API unreachable', tone: 'warn' }
+    if (!tunnel) {
+      return 'warn'
     }
+    if (tunnel.running && tunnel.apiHealth?.ok) {
+      return 'ok'
+    }
+    if (tunnel.running) {
+      return 'warn'
+    }
+    return 'down'
+  }
 
-    return { label: 'Tunnel stopped', tone: 'down' }
-  }, [tunnelInfo])
+  function getTunnelLabel(tunnel) {
+    if (!tunnelState.reachable) {
+      return 'Tunnel manager offline'
+    }
+    if (!tunnel) {
+      return 'Tunnel not configured'
+    }
+    if (tunnel.running && tunnel.apiHealth?.ok) {
+      return 'Tunnel active'
+    }
+    if (tunnel.running) {
+      return 'Tunnel running, API unreachable'
+    }
+    return 'Tunnel stopped'
+  }
 
   return (
     <div className="dashboard-shell">
@@ -805,25 +896,56 @@ function App() {
         <p>{headerData.gpu}</p>
       </header>
 
-      <section className="tunnel-strip" data-tone={tunnelState.tone}>
-        <div>
-          <strong>{tunnelState.label}</strong>
+      <section className="tunnel-strip" data-tone={getTunnelTone(activeTunnelInfo)}>
+        <div className="tunnel-strip-header">
+          <strong>
+            Active API: {buildApiBaseUrlForPort(activeApiPort)} ({getTunnelLabel(activeTunnelInfo)})
+          </strong>
           <p>
-            {tunnelInfo.config
-              ? `Forward ${tunnelInfo.config.localBind}:${tunnelInfo.config.localPort} to ${tunnelInfo.config.remoteHost}:${tunnelInfo.config.remotePort}`
-              : tunnelInfo.apiMessage}
+            {activeTunnelInfo?.config
+              ? `Forward ${activeTunnelInfo.config.localBind}:${activeTunnelInfo.config.localPort} to ${activeTunnelInfo.config.remoteHost}:${activeTunnelInfo.config.remotePort}`
+              : tunnelState.message}
           </p>
         </div>
-        <button
-          type="button"
-          className="tunnel-refresh"
-          onClick={restartTunnel}
-          disabled={tunnelBusy}
-          title="Restart SSH tunnel"
-        >
-          <RotateCcw size={16} />
-          {tunnelBusy ? 'Restarting...' : 'Restart tunnel'}
-        </button>
+
+        <div className="tunnel-grid">
+          {visiblePorts.map((port) => {
+            const tunnel = tunnelState.tunnels.find((entry) => entry.port === port) || null
+            const tunnelTone = getTunnelTone(tunnel)
+            const restartBusy = Boolean(tunnelBusyByPort[port])
+            const isSelected = port === activeApiPort
+
+            return (
+              <div className="tunnel-card" data-tone={tunnelTone} key={`tunnel-${port}`}>
+                <div className="tunnel-card-meta">
+                  <strong>Port {port}</strong>
+                  <p>{getTunnelLabel(tunnel)}</p>
+                </div>
+                <div className="tunnel-card-actions">
+                  <button
+                    type="button"
+                    className="tunnel-toggle"
+                    onClick={() => setActiveApiPort(port)}
+                    disabled={isSelected}
+                    title={`Use API from port ${port}`}
+                  >
+                    {isSelected ? 'Viewing this API' : 'Use this API'}
+                  </button>
+                  <button
+                    type="button"
+                    className="tunnel-refresh"
+                    onClick={() => restartTunnel(port)}
+                    disabled={restartBusy || !tunnelState.reachable}
+                    title={`Restart tunnel for port ${port}`}
+                  >
+                    <RotateCcw size={16} />
+                    {restartBusy ? 'Restarting...' : 'Restart tunnel'}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </section>
 
       {errorMessage && <div className="error-banner">{errorMessage}</div>}

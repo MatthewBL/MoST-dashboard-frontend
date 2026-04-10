@@ -19,7 +19,9 @@ Frontend dashboard for visualizing experiment data served by MoST-API.
 - Download buttons for `results.csv` and `results.json` in detail panel
 - Warning confirmation before `results.json` download
 - Automatic SSH tunnel startup when running `npm run dev`
-- Tunnel status strip in the frontend with one-click restart action
+- Tunnel status strip in the frontend with per-port controls:
+	- switch active API source per port
+	- restart each tunnel independently
 
 ## Install
 
@@ -42,10 +44,12 @@ Example:
 ```env
 VITE_API_BASE_URL=http://localhost:4000
 VITE_TUNNEL_MANAGER_URL=http://localhost:4100
+VITE_API_PORTS=4000,4001,4002
 
 REMOTE_TUNNEL_HOST=c03
 REMOTE_TUNNEL_USER=
 REMOTE_TUNNEL_PORT=4000
+REMOTE_TUNNEL_PORTS=4000,4001,4002
 REMOTE_TUNNEL_TARGET_HOST=
 LOCAL_TUNNEL_BIND=127.0.0.1
 TUNNEL_MANAGER_PORT=4100
@@ -84,10 +88,12 @@ REMOTE_TUNNEL_PORT=4000
 
 The manager exposes:
 
-- `GET /status` to report tunnel and API reachability
-- `POST /restart` to recreate the tunnel
+- `GET /status` to report all configured tunnels and API reachability
+- `GET /status/:port` to report a single tunnel
+- `POST /restart` with optional JSON body `{ "port": 4001 }` to restart one tunnel
+- `POST /restart/:port` to restart one tunnel
 
-The dashboard calls these endpoints to show tunnel status and restart it from the UI.
+The dashboard calls these endpoints to show per-port status, switch API view across ports, and restart each tunnel from the UI.
 
 ## Manual SSH Tunnel Example (optional)
 
