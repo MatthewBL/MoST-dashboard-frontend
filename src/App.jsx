@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment } from 'react'
 import {
   ComposedChart,
   Line,
@@ -44,6 +45,14 @@ const SUCCESS_KEYS = [
   'pass_rate',
 ]
 const STAGE_KEYS = ['STAGE', 'Stage', 'stage', 'Pipeline stage', 'pipeline_stage']
+const FINISHED_KEYS = ['FINISHED', 'Finished', 'finished', 'IS_FINISHED', 'is_finished']
+const LARGEST_TRUE_KEYS = [
+  'LARGEST_TRUE',
+  'Largest true',
+  'largest_true',
+  'largestTrue',
+  'CURRENT_LARGEST_TRUE',
+]
 
 function getFieldValue(row, keys) {
   if (!row) {
@@ -121,6 +130,58 @@ function buildApiUrl(pathname) {
 
 function buildTunnelUrl(pathname) {
   return `${TUNNEL_MANAGER_URL}${pathname}`
+}
+
+function parseExperimentPair(experimentName) {
+  if (!experimentName || !experimentName.includes('_')) {
+    return null
+  }
+
+  const [inputRange, outputRange] = experimentName.split('_')
+  if (!inputRange || !outputRange) {
+    return null
+  }
+
+  return {
+    inputRange,
+    outputRange,
+  }
+}
+
+function intervalStart(interval) {
+  if (!interval) {
+    return Number.MAX_SAFE_INTEGER
+  }
+
+  const [startToken] = interval.split('-')
+  const numeric = Number(startToken)
+  return Number.isFinite(numeric) ? numeric : Number.MAX_SAFE_INTEGER
+}
+
+function formatIntervalLabel(interval) {
+  if (!interval) {
+    return ''
+  }
+
+  return interval.replace('-', '/')
+}
+
+function getHeatmapColor(value, min, max) {
+  if (!Number.isFinite(value)) {
+    return '#ffffff'
+  }
+
+  const t = max > min ? (value - min) / (max - min) : 1
+  const clamped = Math.min(Math.max(t, 0), 1)
+
+  const start = { r: 239, g: 239, b: 197 }
+  const end = { r: 24, g: 48, b: 132 }
+
+  const r = Math.round(start.r + (end.r - start.r) * clamped)
+  const g = Math.round(start.g + (end.g - start.g) * clamped)
+  const b = Math.round(start.b + (end.b - start.b) * clamped)
+
+  return `rgb(${r}, ${g}, ${b})`
 }
 
 async function fetchJson(pathname) {
@@ -213,6 +274,8 @@ function App() {
   const [loadingIterations, setLoadingIterations] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [busyExperimentDownload, setBusyExperimentDownload] = useState('')
+  const [experimentStatuses, setExperimentStatuses] = useState({})
+  const [loadingMatrixStatus, setLoadingMatrixStatus] = useState(false)
   const [tunnelInfo, setTunnelInfo] = useState({
     loading: true,
     reachable: false,
@@ -306,6 +369,96 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (experiments.length === 0) {
+      setExperimentStatuses({})
+      return
+    }
+
+    let isCancelled = false
+
+    async function loadExperimentStatuses() {
+      setLoadingMatrixStatus(true)
+
+      try {
+        const statuses = await Promise.all(
+          experiments.map(async (experiment) => {
+            try {
+              const iterationResponse = await fetchJson(
+                `/api/experiments/${encodeURIComponent(experiment)}/iterations`,
+              )
+
+              const iterations = sortIterationsChronologically(iterationResponse.iterations || [])
+              if (iterations.length === 0) {
+                return [
+                  experiment,
+                  {
+                    hasResults: false,
+                    finished: false,
+                    largestTrue: null,
+                  },
+                ]
+              }
+
+              const latestIteration = iterations[iterations.length - 1]
+              const csv = await fetchJson(
+                `/api/experiments/${encodeURIComponent(experiment)}/iterations/${encodeURIComponent(latestIteration)}/results.csv`,
+              )
+
+              const rows = csv.rows || []
+              const latestRow = rows.length > 0 ? rows[rows.length - 1] : null
+              if (!latestRow) {
+                return [
+                  experiment,
+                  {
+                    hasResults: false,
+                    finished: false,
+                    largestTrue: null,
+                  },
+                ]
+              }
+
+              const finished = parseBoolean(getFieldValue(latestRow, FINISHED_KEYS))
+              const largestTrue = parseNumber(getFieldValue(latestRow, LARGEST_TRUE_KEYS))
+
+              return [
+                experiment,
+                {
+                  hasResults: true,
+                  finished,
+                  largestTrue,
+                },
+              ]
+            } catch {
+              return [
+                experiment,
+                {
+                  hasResults: false,
+                  finished: false,
+                  largestTrue: null,
+                },
+              ]
+            }
+          }),
+        )
+
+        if (!isCancelled) {
+          setExperimentStatuses(Object.fromEntries(statuses))
+        }
+      } finally {
+        if (!isCancelled) {
+          setLoadingMatrixStatus(false)
+        }
+      }
+    }
+
+    loadExperimentStatuses()
+
+    return () => {
+      isCancelled = true
+    }
+  }, [experiments])
+
+  useEffect(() => {
     if (!selectedExperiment) {
       return
     }
@@ -376,6 +529,60 @@ function App() {
     () => iterationData.find((point) => point.iteration === selectedIteration) || null,
     [iterationData, selectedIteration],
   )
+
+  const matrixModel = useMemo(() => {
+    const pairEntries = experiments
+      .map((experiment) => {
+        const parsed = parseExperimentPair(experiment)
+        if (!parsed) {
+          return null
+        }
+
+        return {
+          experiment,
+          inputRange: parsed.inputRange,
+          outputRange: parsed.outputRange,
+        }
+      })
+      .filter(Boolean)
+
+    const inputRanges = [...new Set(pairEntries.map((entry) => entry.inputRange))].sort(
+      (a, b) => intervalStart(a) - intervalStart(b),
+    )
+    const outputRanges = [...new Set(pairEntries.map((entry) => entry.outputRange))].sort(
+      (a, b) => intervalStart(a) - intervalStart(b),
+    )
+
+    const pairMap = pairEntries.reduce((accumulator, entry) => {
+      accumulator[`${entry.inputRange}__${entry.outputRange}`] = entry.experiment
+      return accumulator
+    }, {})
+
+    return {
+      inputRanges,
+      outputRanges,
+      pairMap,
+    }
+  }, [experiments])
+
+  const finishedLargestTrueValues = useMemo(
+    () =>
+      Object.values(experimentStatuses)
+        .filter((status) => status?.hasResults && status?.finished && Number.isFinite(status?.largestTrue))
+        .map((status) => status.largestTrue),
+    [experimentStatuses],
+  )
+
+  const heatScale = useMemo(() => {
+    if (finishedLargestTrueValues.length === 0) {
+      return { min: 0, max: 1 }
+    }
+
+    return {
+      min: Math.min(...finishedLargestTrueValues),
+      max: Math.max(...finishedLargestTrueValues),
+    }
+  }, [finishedLargestTrueValues])
 
   const tableColumns = useMemo(() => {
     const columns = new Set()
@@ -559,34 +766,85 @@ function App() {
 
       <main className="dashboard-main">
         <aside className="experiment-panel">
-          <h2>Experiments</h2>
-          <ul>
-            {experiments.map((experiment) => {
-              const isSelected = selectedExperiment === experiment
+          <div className="experiment-panel-header">
+            <h2>Experiments Matrix</h2>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => selectedExperiment && downloadExperimentCsvZip(selectedExperiment)}
+              title="Download selected experiment CSV zip"
+              aria-label="Download selected experiment zip"
+              disabled={!selectedExperiment || busyExperimentDownload === selectedExperiment}
+            >
+              <Download size={16} />
+            </button>
+          </div>
+          <p className="matrix-helper">Rows: input intervals. Columns: output intervals.</p>
 
-              return (
-                <li key={experiment} className={isSelected ? 'selected' : ''}>
-                  <button
-                    type="button"
-                    className="experiment-item"
-                    onClick={() => setSelectedExperiment(experiment)}
-                  >
-                    <span>{experiment}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    onClick={() => downloadExperimentCsvZip(experiment)}
-                    title="Download experiment CSV zip"
-                    aria-label={`Download ${experiment} zip`}
-                    disabled={busyExperimentDownload === experiment}
-                  >
-                    <Download size={16} />
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
+          {matrixModel.inputRanges.length === 0 || matrixModel.outputRanges.length === 0 ? (
+            <p className="placeholder">No interval-pair experiments found.</p>
+          ) : (
+            <div className="experiment-matrix-wrapper">
+              <div
+                className="experiment-matrix"
+                style={{
+                  gridTemplateColumns: `minmax(68px, 1.2fr) repeat(${matrixModel.outputRanges.length}, minmax(0, 1fr))`,
+                }}
+              >
+                {matrixModel.inputRanges.map((inputRange) => (
+                  <Fragment key={`matrix-row-${inputRange}`}>
+                    <div className="matrix-header matrix-row-header" key={`row-${inputRange}`}>
+                      {formatIntervalLabel(inputRange)}
+                    </div>
+                    {matrixModel.outputRanges.map((outputRange) => {
+                      const pairKey = `${inputRange}__${outputRange}`
+                      const experiment = matrixModel.pairMap[pairKey] || null
+                      const status = experiment ? experimentStatuses[experiment] : null
+                      const isSelected = experiment === selectedExperiment
+                      const hasValue = Number.isFinite(status?.largestTrue)
+
+                      let backgroundColor = '#ffffff'
+                      let text = ''
+                      let tone = 'empty'
+
+                      if (status?.hasResults && !status?.finished) {
+                        backgroundColor = '#ffd1e3'
+                        text = hasValue ? String(Math.round(status.largestTrue)) : ''
+                        tone = 'pending'
+                      } else if (status?.hasResults && status?.finished) {
+                        backgroundColor = getHeatmapColor(status.largestTrue, heatScale.min, heatScale.max)
+                        text = hasValue ? String(Math.round(status.largestTrue)) : ''
+                        tone = 'finished'
+                      }
+
+                      return (
+                        <button
+                          key={`${inputRange}-${outputRange}`}
+                          type="button"
+                          className={`matrix-cell ${isSelected ? 'is-selected' : ''}`}
+                          data-tone={tone}
+                          style={{ backgroundColor }}
+                          onClick={() => experiment && setSelectedExperiment(experiment)}
+                          disabled={!experiment}
+                          title={experiment || 'No experiment mapped for this pair'}
+                        >
+                          <span>{text}</span>
+                        </button>
+                      )
+                    })}
+                  </Fragment>
+                ))}
+
+                <div className="matrix-corner matrix-footer-corner" />
+                {matrixModel.outputRanges.map((outputRange) => (
+                  <div className="matrix-header matrix-col-footer" key={`footer-${outputRange}`}>
+                    {formatIntervalLabel(outputRange)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {loadingMatrixStatus && <p className="matrix-loading">Updating matrix status...</p>}
         </aside>
 
         <section className="chart-panel">
