@@ -174,11 +174,7 @@ function formatIntervalLabel(interval) {
   const displayStart = start === '10000000' ? '∞' : start
   const displayEnd = end === '10000000' ? '∞' : end
 
-  if (!displayStart || !displayEnd) {
-    return interval.replace('-', '/')
-  }
-
-  return `${displayStart}/${displayEnd}`
+  return `${displayStart}-${displayEnd}`
 }
 
 function buildConfiguredExperimentList(rawList) {
@@ -892,7 +888,10 @@ function App() {
                   </Fragment>
                 ))}
 
-                <div className="matrix-corner matrix-footer-corner" />
+                <div className="matrix-corner matrix-footer-corner">
+                  <span className="matrix-corner-label matrix-corner-label-input">Input</span>
+                  <span className="matrix-corner-label matrix-corner-label-output">Output</span>
+                </div>
                 {matrixModel.outputRanges.map((outputRange) => (
                   <div className="matrix-header matrix-col-footer" key={`footer-${outputRange}`}>
                     {formatIntervalLabel(outputRange)}
