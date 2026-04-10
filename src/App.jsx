@@ -160,6 +160,44 @@ function formatSuccessRate(value) {
   return `${numeric}%`
 }
 
+function extractModelUrl(gpuResponse) {
+  const candidates = [
+    gpuResponse?.url,
+    gpuResponse?.URL,
+    gpuResponse?.modelUrl,
+    gpuResponse?.model_url,
+    gpuResponse?.endpoint,
+    gpuResponse?.gpuUsed,
+  ]
+
+  const found = candidates.find((value) => value !== undefined && value !== null && String(value).trim() !== '')
+  return found ? String(found).trim() : 'Unavailable'
+}
+
+function extractGpuUsed(gpuResponse) {
+  const candidates = [
+    gpuResponse?.gpuUsed,
+    gpuResponse?.gpu,
+    gpuResponse?.device,
+    gpuResponse?.name,
+  ]
+
+  const found = candidates.find((value) => value !== undefined && value !== null && String(value).trim() !== '')
+  return found ? String(found).trim() : 'Unavailable'
+}
+
+function extractModelName(llmResponse) {
+  const candidates = [
+    llmResponse?.llmName,
+    llmResponse?.modelName,
+    llmResponse?.model,
+    llmResponse?.name,
+  ]
+
+  const found = candidates.find((value) => value !== undefined && value !== null && String(value).trim() !== '')
+  return found ? String(found).trim() : 'Unknown model'
+}
+
 function buildApiBaseUrlForPort(port) {
   try {
     const url = new URL(API_BASE_URL)
@@ -366,7 +404,7 @@ function IterationSummary({ point }) {
 function App() {
   const chartWrapperRef = useRef(null)
   const [activeApiPort, setActiveApiPort] = useState(CONFIGURED_API_PORTS[0])
-  const [headerData, setHeaderData] = useState({ llm: 'Loading...', gpu: 'Loading...' })
+  const [headerData, setHeaderData] = useState({ llm: 'Loading...', gpu: 'Loading...', modelUrl: 'Loading...' })
   const [experiments, setExperiments] = useState([])
   const [selectedExperiment, setSelectedExperiment] = useState('')
   const [iterationData, setIterationData] = useState([])
@@ -385,6 +423,7 @@ function App() {
     message: 'Checking...',
   })
   const [tunnelBusyByPort, setTunnelBusyByPort] = useState({})
+  const [portIdentityByPort, setPortIdentityByPort] = useState({})
 
   useEffect(() => {
     let isMounted = true
@@ -456,11 +495,12 @@ function App() {
         ])
 
         setHeaderData({
-          llm: llmResponse.llmName || 'Unknown model',
-          gpu: gpuResponse.gpuUsed || 'Unknown GPU',
+          llm: extractModelName(llmResponse),
+          gpu: extractGpuUsed(gpuResponse),
+          modelUrl: extractModelUrl(gpuResponse),
         })
       } catch {
-        setHeaderData({ llm: 'Unavailable', gpu: 'Unavailable' })
+        setHeaderData({ llm: 'Unavailable', gpu: 'Unavailable', modelUrl: 'Unavailable' })
       }
     }
 
@@ -857,6 +897,68 @@ function App() {
     return [...new Set(merged)]
   }, [tunnelState.tunnels])
 
+  useEffect(() => {
+    let isCancelled = false
+
+    async function fetchPortIdentity(port) {
+      try {
+        const [llmResponse, gpuResponse] = await Promise.all([
+          fetchJson('/api/llm-name', port),
+          fetchJson('/api/gpu-used', port),
+        ])
+
+        return {
+          llm: extractModelName(llmResponse),
+          gpu: extractGpuUsed(gpuResponse),
+          modelUrl: extractModelUrl(gpuResponse),
+        }
+      } catch {
+        return {
+          llm: 'Unavailable',
+          gpu: 'Unavailable',
+          modelUrl: 'Unavailable',
+        }
+      }
+    }
+
+    async function refreshPortIdentities() {
+      const entries = await Promise.all(
+        visiblePorts.map(async (port) => [port, await fetchPortIdentity(port)]),
+      )
+
+      if (isCancelled) {
+        return
+      }
+
+      setPortIdentityByPort((previous) => ({
+        ...previous,
+        ...Object.fromEntries(entries),
+      }))
+    }
+
+    setPortIdentityByPort((previous) => {
+      const next = { ...previous }
+      for (const port of visiblePorts) {
+        if (!next[port]) {
+          next[port] = {
+            llm: 'Loading...',
+            gpu: 'Loading...',
+            modelUrl: 'Loading...',
+          }
+        }
+      }
+      return next
+    })
+
+    refreshPortIdentities()
+    const timer = setInterval(refreshPortIdentities, 20000)
+
+    return () => {
+      isCancelled = true
+      clearInterval(timer)
+    }
+  }, [visiblePorts])
+
   function getTunnelTone(tunnel) {
     if (!tunnelState.reachable) {
       return 'down'
@@ -901,6 +1003,8 @@ function App() {
           <strong>
             Active API: {buildApiBaseUrlForPort(activeApiPort)} ({getTunnelLabel(activeTunnelInfo)})
           </strong>
+          <p>Model: {headerData.llm}</p>
+          <p>GPU used: {headerData.gpu}</p>
           <p>
             {activeTunnelInfo?.config
               ? `Forward ${activeTunnelInfo.config.localBind}:${activeTunnelInfo.config.localPort} to ${activeTunnelInfo.config.remoteHost}:${activeTunnelInfo.config.remotePort}`
@@ -914,27 +1018,43 @@ function App() {
             const tunnelTone = getTunnelTone(tunnel)
             const restartBusy = Boolean(tunnelBusyByPort[port])
             const isSelected = port === activeApiPort
+            const identity = portIdentityByPort[port] || {
+              llm: 'Loading...',
+              gpu: 'Loading...',
+              modelUrl: 'Loading...',
+            }
 
             return (
-              <div className="tunnel-card" data-tone={tunnelTone} key={`tunnel-${port}`}>
+              <div
+                className={`tunnel-card ${isSelected ? 'is-active' : ''}`}
+                data-tone={tunnelTone}
+                key={`tunnel-${port}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => setActiveApiPort(port)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    setActiveApiPort(port)
+                  }
+                }}
+                aria-pressed={isSelected}
+                title={`View API from port ${port}`}
+              >
                 <div className="tunnel-card-meta">
-                  <strong>Port {port}</strong>
+                  <strong>{isSelected ? `Port ${port} - Active` : `Port ${port}`}</strong>
                   <p>{getTunnelLabel(tunnel)}</p>
+                  <p>Model: {identity.llm}</p>
+                  <p>GPU used: {identity.gpu}</p>
                 </div>
                 <div className="tunnel-card-actions">
                   <button
                     type="button"
-                    className="tunnel-toggle"
-                    onClick={() => setActiveApiPort(port)}
-                    disabled={isSelected}
-                    title={`Use API from port ${port}`}
-                  >
-                    {isSelected ? 'Viewing this API' : 'Use this API'}
-                  </button>
-                  <button
-                    type="button"
                     className="tunnel-refresh"
-                    onClick={() => restartTunnel(port)}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      restartTunnel(port)
+                    }}
                     disabled={restartBusy || !tunnelState.reachable}
                     title={`Restart tunnel for port ${port}`}
                   >
