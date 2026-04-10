@@ -16,6 +16,8 @@ import './App.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000'
 const TUNNEL_MANAGER_URL = import.meta.env.VITE_TUNNEL_MANAGER_URL || 'http://localhost:4100'
+const EXPERIMENT_LIST_RAW =
+  import.meta.env.VITE_EXPERIMENT_LIST || import.meta.env.EXPERIMENT_LIST || ''
 
 const STAGE_ONE_COLOR = '#1f5fff'
 const STAGE_TWO_COLOR = '#f68026'
@@ -133,11 +135,16 @@ function buildTunnelUrl(pathname) {
 }
 
 function parseExperimentPair(experimentName) {
-  if (!experimentName || !experimentName.includes('_')) {
+  if (!experimentName) {
     return null
   }
 
-  const [inputRange, outputRange] = experimentName.split('_')
+  const separator = experimentName.includes('_') ? '_' : experimentName.includes(':') ? ':' : null
+  if (!separator) {
+    return null
+  }
+
+  const [inputRange, outputRange] = experimentName.split(separator)
   if (!inputRange || !outputRange) {
     return null
   }
@@ -163,7 +170,37 @@ function formatIntervalLabel(interval) {
     return ''
   }
 
-  return interval.replace('-', '/')
+  const [start, end] = interval.split('-')
+  const displayStart = start === '10000000' ? '∞' : start
+  const displayEnd = end === '10000000' ? '∞' : end
+
+  if (!displayStart || !displayEnd) {
+    return interval.replace('-', '/')
+  }
+
+  return `${displayStart}/${displayEnd}`
+}
+
+function buildConfiguredExperimentList(rawList) {
+  if (!rawList) {
+    return []
+  }
+
+  const normalized = rawList
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const pair = parseExperimentPair(item)
+      if (!pair) {
+        return null
+      }
+
+      return `${pair.inputRange}_${pair.outputRange}`
+    })
+    .filter(Boolean)
+
+  return [...new Set(normalized)]
 }
 
 function getHeatmapColor(value, min, max) {
@@ -190,6 +227,19 @@ async function fetchJson(pathname) {
     throw new Error(`Request failed (${response.status}) for ${pathname}`)
   }
   return response.json()
+}
+
+async function fetchExperimentIterations(experimentName) {
+  const response = await fetch(
+    buildApiUrl(`/api/experiments/${encodeURIComponent(experimentName)}/iterations`),
+  )
+
+  if (!response.ok) {
+    return []
+  }
+
+  const data = await response.json()
+  return sortIterationsChronologically(data.iterations || [])
 }
 
 function CustomNode({ cx, cy, payload, onHover, onHoverEnd, onSelect }) {
@@ -354,10 +404,13 @@ function App() {
     async function loadExperiments() {
       try {
         const data = await fetchJson('/api/experiments')
-        const list = data.experiments || []
-        setExperiments(list)
-        if (list.length > 0) {
-          setSelectedExperiment(list[0])
+        const apiList = data.experiments || []
+        const configuredList = buildConfiguredExperimentList(EXPERIMENT_LIST_RAW)
+        const matrixList = configuredList.length > 0 ? configuredList : apiList
+
+        setExperiments(matrixList)
+        if (matrixList.length > 0) {
+          setSelectedExperiment(matrixList[0])
         }
       } catch {
         setErrorMessage('Unable to load experiments from API.')
@@ -383,11 +436,7 @@ function App() {
         const statuses = await Promise.all(
           experiments.map(async (experiment) => {
             try {
-              const iterationResponse = await fetchJson(
-                `/api/experiments/${encodeURIComponent(experiment)}/iterations`,
-              )
-
-              const iterations = sortIterationsChronologically(iterationResponse.iterations || [])
+              const iterations = await fetchExperimentIterations(experiment)
               if (iterations.length === 0) {
                 return [
                   experiment,
@@ -468,11 +517,14 @@ function App() {
       setErrorMessage('')
 
       try {
-        const iterationResponse = await fetchJson(
-          `/api/experiments/${encodeURIComponent(selectedExperiment)}/iterations`,
-        )
+        const iterations = await fetchExperimentIterations(selectedExperiment)
 
-        const iterations = sortIterationsChronologically(iterationResponse.iterations || [])
+        if (iterations.length === 0) {
+          setIterationData([])
+          setSelectedIteration('')
+          setSelectedIterationRows([])
+          return
+        }
 
         const points = await Promise.all(
           iterations.map(async (iterationName, index) => {
@@ -583,6 +635,11 @@ function App() {
       max: Math.max(...finishedLargestTrueValues),
     }
   }, [finishedLargestTrueValues])
+
+  const displayedInputRanges = useMemo(
+    () => [...matrixModel.inputRanges].reverse(),
+    [matrixModel.inputRanges],
+  )
 
   const tableColumns = useMemo(() => {
     const columns = new Set()
@@ -791,7 +848,7 @@ function App() {
                   gridTemplateColumns: `minmax(68px, 1.2fr) repeat(${matrixModel.outputRanges.length}, minmax(0, 1fr))`,
                 }}
               >
-                {matrixModel.inputRanges.map((inputRange) => (
+                {displayedInputRanges.map((inputRange) => (
                   <Fragment key={`matrix-row-${inputRange}`}>
                     <div className="matrix-header matrix-row-header" key={`row-${inputRange}`}>
                       {formatIntervalLabel(inputRange)}

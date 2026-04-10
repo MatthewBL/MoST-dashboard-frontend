@@ -96,7 +96,7 @@
 
 .dashboard-main {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: minmax(360px, 0.7fr) minmax(0, 1.05fr);
   gap: 1rem;
   padding: 0 1rem 1rem;
   min-height: 440px;
