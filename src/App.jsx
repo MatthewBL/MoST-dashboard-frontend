@@ -171,10 +171,13 @@ function formatIntervalLabel(interval) {
   }
 
   const [start, end] = interval.split('-')
-  const displayStart = start === '10000000' ? '∞' : start
-  const displayEnd = end === '10000000' ? '∞' : end
 
-  return `${displayStart}-${displayEnd}`
+  // Treat the configured max sentinel as an open-ended interval, e.g. "4000+".
+  if (end === '10000000') {
+    return `${start}+`
+  }
+
+  return `${start}-${end}`
 }
 
 function buildConfiguredExperimentList(rawList) {
@@ -197,6 +200,14 @@ function buildConfiguredExperimentList(rawList) {
     .filter(Boolean)
 
   return [...new Set(normalized)]
+}
+
+function formatExperimentLabel(experimentName) {
+  if (!experimentName) {
+    return 'No experiment selected'
+  }
+
+  return experimentName.replace('_', '/')
 }
 
 function getHeatmapColor(value, min, max) {
@@ -905,7 +916,7 @@ function App() {
 
         <section className="chart-panel">
           <div className="chart-header">
-            <h2>{selectedExperiment || 'No experiment selected'}</h2>
+            <h2>{formatExperimentLabel(selectedExperiment)}</h2>
             <div className="chart-legend">
               <span><i className="dot stage-1" />Stage 1</span>
               <span><i className="dot stage-2" />Stage 2</span>
@@ -982,7 +993,11 @@ function App() {
         <div className="detail-header">
           <div>
             <h2>Iteration Detail</h2>
-            <p>{selectedPoint ? `${selectedPoint.iteration} - ${selectedPoint.dateLabel}` : 'Select a point in the chart'}</p>
+            <p>
+              {selectedPoint
+                ? `Iteration ${selectedPoint.index} - ${selectedPoint.dateLabel}`
+                : 'Select a point in the chart'}
+            </p>
           </div>
           <div className="detail-actions">
             <button
