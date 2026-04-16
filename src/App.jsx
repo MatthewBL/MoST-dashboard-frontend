@@ -994,8 +994,7 @@ function App() {
   return (
     <div className="dashboard-shell">
       <header className="dashboard-header">
-        <h1>{headerData.llm}</h1>
-        <p>{headerData.gpu}</p>
+        <h1>MoST Dashboard</h1>
       </header>
 
       <section className="tunnel-strip" data-tone={getTunnelTone(activeTunnelInfo)}>
@@ -1003,7 +1002,7 @@ function App() {
           <strong>
             Active API: {buildApiBaseUrlForPort(activeApiPort)} ({getTunnelLabel(activeTunnelInfo)})
           </strong>
-          <p>Model: {headerData.llm}</p>
+          <p className="tunnel-model">Model: {headerData.llm}</p>
           <p>GPU used: {headerData.gpu}</p>
           <p>
             {activeTunnelInfo?.config
@@ -1042,10 +1041,9 @@ function App() {
                 title={`View API from port ${port}`}
               >
                 <div className="tunnel-card-meta">
-                  <strong>{isSelected ? `Port ${port} - Active` : `Port ${port}`}</strong>
-                  <p>{getTunnelLabel(tunnel)}</p>
-                  <p>Model: {identity.llm}</p>
-                  <p>GPU used: {identity.gpu}</p>
+                  <strong>{`Model: ${identity.llm}`}</strong>
+                  <p className="tunnel-model">GPU used: {identity.gpu}</p>
+                  <p>{getTunnelLabel(tunnel)} (Port {port})</p>
                 </div>
                 <div className="tunnel-card-actions">
                   <button

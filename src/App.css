@@ -17,9 +17,9 @@
 
 .dashboard-header h1 {
   margin: 0;
-  font-size: clamp(1.4rem, 3vw, 2.3rem);
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  font-size: clamp(1.1rem, 2.2vw, 2rem);
+  letter-spacing: 0.01em;
+  text-transform: none;
 }
 
 .dashboard-header p {
@@ -334,6 +334,19 @@
   border: 2px solid #111111;
   z-index: 2;
   position: relative;
+}
+
+.matrix-cell.is-selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.24);
+  pointer-events: none;
+}
+
+.matrix-cell.is-selected > span {
+  position: relative;
+  z-index: 1;
 }
 
 .matrix-cell:disabled {
