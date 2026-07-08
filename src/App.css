@@ -208,6 +208,35 @@
   color: var(--ink-700);
 }
 
+.results-scope-picker {
+  margin-top: 0.55rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.results-scope-picker label {
+  color: var(--ink-700);
+  font-size: 0.7rem;
+  font-family: var(--mono-font);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.results-scope-picker select {
+  border: 1px solid var(--line-300);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink-900);
+  font-family: var(--ui-font);
+  font-size: 0.86rem;
+  padding: 0.42rem 0.55rem;
+}
+
+.results-scope-picker select:focus-visible {
+  outline: 2px solid rgba(31, 95, 255, 0.35);
+  outline-offset: 1px;
+}
+
 .matrix-helper {
   margin: 0.55rem 0 0.7rem;
   color: var(--ink-700);
@@ -252,7 +281,7 @@
 .matrix-header {
   background: var(--paper-100);
   color: var(--ink-700);
-  font-size: 0.8rem;
+  font-size: 0.9rem;
 }
 
 .matrix-row-header {
@@ -281,7 +310,7 @@
 
 .matrix-corner-label {
   position: absolute;
-  font-size: 0.8rem;
+  font-size: 0.9rem;
   line-height: 1;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -304,12 +333,28 @@
   border-top: none;
   border-left: none;
   border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.25rem;
   color: #1f2738;
   font-family: var(--mono-font);
-  font-size: 0.8rem;
+  font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
   transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.matrix-cell-values {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.12rem;
+  line-height: 1.1;
+}
+
+.matrix-cell-subvalue {
+  font-size: 0.9rem;
 }
 
 .matrix-cell[data-tone='finished'] {
@@ -344,7 +389,7 @@
   pointer-events: none;
 }
 
-.matrix-cell.is-selected > span {
+.matrix-cell.is-selected > .matrix-cell-values {
   position: relative;
   z-index: 1;
 }
@@ -486,11 +531,28 @@
   align-items: center;
   color: var(--ink-900);
   cursor: pointer;
+  transition: all 0.2s ease;
 }
 
 .icon-button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.icon-button[data-active="true"] {
+  background: #1f5fff;
+  color: #ffffff;
+  border-color: #1f5fff;
+}
+
+.icon-button[data-active="true"]:hover {
+  background: #1d4fbf;
+  border-color: #1d4fbf;
+}
+
+.button-group {
+  display: flex;
+  gap: 0.5rem;
 }
 
 .table-wrapper {

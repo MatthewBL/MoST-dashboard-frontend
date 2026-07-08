@@ -56,6 +56,7 @@ const LARGEST_TRUE_KEYS = [
   'largestTrue',
   'CURRENT_LARGEST_TRUE',
 ]
+const DEFAULT_RESULTS_SCOPE = 'current'
 
 function parsePortToken(token) {
   const numeric = Number(String(token || '').trim())
@@ -208,8 +209,19 @@ function buildApiBaseUrlForPort(port) {
   }
 }
 
-function buildApiUrl(pathname, port) {
-  return `${buildApiBaseUrlForPort(port)}${pathname}`
+function buildApiUrl(pathname, port, queryParams = {}) {
+  const baseUrl = buildApiBaseUrlForPort(port)
+  const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`
+  const url = new URL(normalizedPath, `${baseUrl}/`)
+
+  Object.entries(queryParams).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') {
+      return
+    }
+    url.searchParams.set(key, String(value))
+  })
+
+  return url.toString()
 }
 
 function buildTunnelUrl(pathname) {
@@ -292,6 +304,14 @@ function formatExperimentLabel(experimentName) {
   return experimentName.replace('_', '/')
 }
 
+function formatResultsScopeLabel(scope) {
+  if (!scope || scope === DEFAULT_RESULTS_SCOPE) {
+    return 'Current results'
+  }
+
+  return scope
+}
+
 function getHeatmapColor(value, min, max) {
   if (!Number.isFinite(value)) {
     return '#ffffff'
@@ -310,17 +330,70 @@ function getHeatmapColor(value, min, max) {
   return `rgb(${r}, ${g}, ${b})`
 }
 
-async function fetchJson(pathname, port) {
-  const response = await fetch(buildApiUrl(pathname, port))
+function getTextColorForBackground(bg) {
+  if (!bg || typeof bg !== 'string') return '#000000'
+
+  let r = 255, g = 255, b = 255
+
+  try {
+    if (bg.startsWith('rgb')) {
+      const nums = bg.match(/\d+/g)
+      if (nums && nums.length >= 3) {
+        r = Number(nums[0]); g = Number(nums[1]); b = Number(nums[2])
+      }
+    } else if (bg.startsWith('#')) {
+      const hex = bg.slice(1)
+      if (hex.length === 3) {
+        r = parseInt(hex[0] + hex[0], 16)
+        g = parseInt(hex[1] + hex[1], 16)
+        b = parseInt(hex[2] + hex[2], 16)
+      } else if (hex.length === 6) {
+        r = parseInt(hex.slice(0, 2), 16)
+        g = parseInt(hex.slice(2, 4), 16)
+        b = parseInt(hex.slice(4, 6), 16)
+      }
+    } else if (bg.startsWith('rgba')) {
+      const nums = bg.match(/\d+(?:\.\d+)?/g)
+      if (nums && nums.length >= 3) {
+        r = Number(nums[0]); g = Number(nums[1]); b = Number(nums[2])
+      }
+    }
+  } catch (e) {
+    return '#000000'
+  }
+
+  const sr = r / 255
+  const sg = g / 255
+  const sb = b / 255
+
+  const lin = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4))
+  const R = lin(sr)
+  const G = lin(sg)
+  const B = lin(sb)
+
+  const L = 0.2126 * R + 0.7152 * G + 0.0722 * B
+
+  const contrastWithBlack = (L + 0.05) / 0.33
+  const contrastWithWhite = 1.05 / (L + 0.05)
+
+  return contrastWithWhite >= contrastWithBlack ? '#ffffff' : '#000000'
+}
+
+async function fetchJson(pathname, port, queryParams = {}) {
+  const response = await fetch(buildApiUrl(pathname, port, queryParams))
   if (!response.ok) {
     throw new Error(`Request failed (${response.status}) for ${pathname}`)
   }
   return response.json()
 }
 
-async function fetchExperimentIterations(experimentName, port) {
+async function fetchExperimentIterations(experimentName, port, resultsScope) {
   const response = await fetch(
-    buildApiUrl(`/api/experiments/${encodeURIComponent(experimentName)}/iterations`, port),
+    buildApiUrl(
+      `/api/experiments/${encodeURIComponent(experimentName)}/iterations`,
+      port,
+      { resultsScope },
+    ),
   )
 
   if (!response.ok) {
@@ -404,6 +477,8 @@ function IterationSummary({ point }) {
 function App() {
   const chartWrapperRef = useRef(null)
   const [activeApiPort, setActiveApiPort] = useState(CONFIGURED_API_PORTS[0])
+  const [resultsScopeOptions, setResultsScopeOptions] = useState([DEFAULT_RESULTS_SCOPE])
+  const [selectedResultsScope, setSelectedResultsScope] = useState(DEFAULT_RESULTS_SCOPE)
   const [headerData, setHeaderData] = useState({ llm: 'Loading...', gpu: 'Loading...', modelUrl: 'Loading...' })
   const [experiments, setExperiments] = useState([])
   const [selectedExperiment, setSelectedExperiment] = useState('')
@@ -414,6 +489,7 @@ function App() {
   const [loadingIterations, setLoadingIterations] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [busyExperimentDownload, setBusyExperimentDownload] = useState('')
+  const [busyMatrixDownload, setBusyMatrixDownload] = useState(false)
   const [experimentStatuses, setExperimentStatuses] = useState({})
   const [loadingMatrixStatus, setLoadingMatrixStatus] = useState(false)
   const [tunnelState, setTunnelState] = useState({
@@ -487,11 +563,36 @@ function App() {
   }, [activeApiPort])
 
   useEffect(() => {
+    async function loadResultsScopes() {
+      try {
+        const data = await fetchJson('/api/results-scopes', activeApiPort)
+        const scopes = Array.isArray(data.scopes) ? data.scopes : []
+        const defaultScope = data.defaultScope || DEFAULT_RESULTS_SCOPE
+        const merged = [...new Set([defaultScope, ...scopes])]
+
+        setResultsScopeOptions(merged.length > 0 ? merged : [DEFAULT_RESULTS_SCOPE])
+        setSelectedResultsScope((previous) => {
+          if (merged.includes(previous)) {
+            return previous
+          }
+
+          return defaultScope
+        })
+      } catch {
+        setResultsScopeOptions([DEFAULT_RESULTS_SCOPE])
+        setSelectedResultsScope(DEFAULT_RESULTS_SCOPE)
+      }
+    }
+
+    loadResultsScopes()
+  }, [activeApiPort])
+
+  useEffect(() => {
     async function loadHeader() {
       try {
         const [llmResponse, gpuResponse] = await Promise.all([
-          fetchJson('/api/llm-name', activeApiPort),
-          fetchJson('/api/gpu-used', activeApiPort),
+          fetchJson('/api/llm-name', activeApiPort, { resultsScope: selectedResultsScope }),
+          fetchJson('/api/gpu-used', activeApiPort, { resultsScope: selectedResultsScope }),
         ])
 
         setHeaderData({
@@ -506,7 +607,9 @@ function App() {
 
     async function loadExperiments() {
       try {
-        const data = await fetchJson('/api/experiments', activeApiPort)
+        const data = await fetchJson('/api/experiments', activeApiPort, {
+          resultsScope: selectedResultsScope,
+        })
         const apiList = data.experiments || []
         const configuredList = buildConfiguredExperimentList(EXPERIMENT_LIST_RAW)
         const matrixList = configuredList.length > 0 ? configuredList : apiList
@@ -526,7 +629,7 @@ function App() {
 
     loadHeader()
     loadExperiments()
-  }, [activeApiPort])
+  }, [activeApiPort, selectedResultsScope])
 
   useEffect(() => {
     if (experiments.length === 0) {
@@ -543,7 +646,11 @@ function App() {
         const statuses = await Promise.all(
           experiments.map(async (experiment) => {
             try {
-              const iterations = await fetchExperimentIterations(experiment, activeApiPort)
+              const iterations = await fetchExperimentIterations(
+                experiment,
+                activeApiPort,
+                selectedResultsScope,
+              )
               if (iterations.length === 0) {
                 return [
                   experiment,
@@ -559,6 +666,7 @@ function App() {
               const csv = await fetchJson(
                 `/api/experiments/${encodeURIComponent(experiment)}/iterations/${encodeURIComponent(latestIteration)}/results.csv`,
                 activeApiPort,
+                { resultsScope: selectedResultsScope },
               )
 
               const rows = csv.rows || []
@@ -613,7 +721,7 @@ function App() {
     return () => {
       isCancelled = true
     }
-  }, [experiments, activeApiPort])
+  }, [experiments, activeApiPort, selectedResultsScope])
 
   useEffect(() => {
     if (!selectedExperiment) {
@@ -625,7 +733,11 @@ function App() {
       setErrorMessage('')
 
       try {
-        const iterations = await fetchExperimentIterations(selectedExperiment, activeApiPort)
+        const iterations = await fetchExperimentIterations(
+          selectedExperiment,
+          activeApiPort,
+          selectedResultsScope,
+        )
 
         if (iterations.length === 0) {
           setIterationData([])
@@ -639,6 +751,7 @@ function App() {
             const csv = await fetchJson(
               `/api/experiments/${encodeURIComponent(selectedExperiment)}/iterations/${encodeURIComponent(iterationName)}/results.csv`,
               activeApiPort,
+              { resultsScope: selectedResultsScope },
             )
 
             const firstRow = csv.rows?.[0] || {}
@@ -684,7 +797,7 @@ function App() {
     }
 
     loadExperimentData()
-  }, [selectedExperiment, activeApiPort])
+  }, [selectedExperiment, activeApiPort, selectedResultsScope])
 
   const selectedPoint = useMemo(
     () => iterationData.find((point) => point.iteration === selectedIteration) || null,
@@ -726,6 +839,11 @@ function App() {
     }
   }, [experiments])
 
+  const matrixExperiments = useMemo(() => {
+    const entries = Object.values(matrixModel.pairMap).filter(Boolean)
+    return [...new Set(entries)]
+  }, [matrixModel])
+
   const finishedLargestTrueValues = useMemo(
     () =>
       Object.values(experimentStatuses)
@@ -733,6 +851,14 @@ function App() {
         .map((status) => status.largestTrue),
     [experimentStatuses],
   )
+
+  const maxLargestTrueValue = useMemo(() => {
+    if (finishedLargestTrueValues.length === 0) {
+      return 0
+    }
+
+    return Math.max(...finishedLargestTrueValues)
+  }, [finishedLargestTrueValues])
 
   const heatScale = useMemo(() => {
     if (finishedLargestTrueValues.length === 0) {
@@ -766,6 +892,22 @@ function App() {
 
     setSelectedIteration(found.iteration)
     setSelectedIterationRows(found.rows)
+  }
+
+  function formatMatrixValue(value) {
+    if (!Number.isFinite(value)) {
+      return ''
+    }
+
+    return String(Math.round(value * 100) / 100)
+  }
+
+  function getInverseNormalizedValue(originalValue) {
+    if (!Number.isFinite(originalValue) || originalValue === 0 || maxLargestTrueValue === 0) {
+      return null
+    }
+
+    return maxLargestTrueValue / originalValue
   }
 
   function handlePointHover(point, position) {
@@ -821,7 +963,9 @@ function App() {
 
     try {
       const endpoint = `/api/experiments/${encodeURIComponent(selectedExperiment)}/iterations/${encodeURIComponent(selectedIteration)}/download/${fileType}`
-      const response = await fetch(buildApiUrl(endpoint, activeApiPort))
+      const response = await fetch(
+        buildApiUrl(endpoint, activeApiPort, { resultsScope: selectedResultsScope }),
+      )
       if (!response.ok) {
         throw new Error('Download failed.')
       }
@@ -833,35 +977,88 @@ function App() {
     }
   }
 
+  async function appendExperimentCsvToZip(experiment, zip) {
+    const iterationResponse = await fetchJson(
+      `/api/experiments/${encodeURIComponent(experiment)}/iterations`,
+      activeApiPort,
+      { resultsScope: selectedResultsScope },
+    )
+    const iterations = iterationResponse.iterations || []
+    let fileCount = 0
+
+    for (const iterationName of iterations) {
+      const endpoint = `/api/experiments/${encodeURIComponent(experiment)}/iterations/${encodeURIComponent(iterationName)}/download/results.csv`
+      const response = await fetch(
+        buildApiUrl(endpoint, activeApiPort, { resultsScope: selectedResultsScope }),
+      )
+      if (!response.ok) {
+        continue
+      }
+
+      const csvBlob = await response.blob()
+      zip.file(`${experiment}/${iterationName}/results.csv`, csvBlob)
+      fileCount += 1
+    }
+
+    return fileCount
+  }
+
   async function downloadExperimentCsvZip(experiment) {
     setBusyExperimentDownload(experiment)
     setErrorMessage('')
 
     try {
-      const iterationResponse = await fetchJson(
-        `/api/experiments/${encodeURIComponent(experiment)}/iterations`,
-        activeApiPort,
-      )
-      const iterations = iterationResponse.iterations || []
       const zip = new JSZip()
-
-      for (const iterationName of iterations) {
-        const endpoint = `/api/experiments/${encodeURIComponent(experiment)}/iterations/${encodeURIComponent(iterationName)}/download/results.csv`
-        const response = await fetch(buildApiUrl(endpoint, activeApiPort))
-        if (!response.ok) {
-          continue
-        }
-
-        const csvBlob = await response.blob()
-        zip.file(`${experiment}/${iterationName}/results.csv`, csvBlob)
+      const fileCount = await appendExperimentCsvToZip(experiment, zip)
+      if (fileCount === 0) {
+        setErrorMessage(`No results.csv files found for ${experiment}.`)
+        return
       }
-
       const zipBlob = await zip.generateAsync({ type: 'blob' })
       saveAs(zipBlob, `${experiment}-iterations-results-csv.zip`)
     } catch {
       setErrorMessage(`Unable to build zip for ${experiment} on port ${activeApiPort}.`)
     } finally {
       setBusyExperimentDownload('')
+    }
+  }
+
+  async function downloadMatrixCsvZip() {
+    if (busyMatrixDownload) {
+      return
+    }
+
+    setBusyMatrixDownload(true)
+    setErrorMessage('')
+
+    try {
+      if (matrixExperiments.length === 0) {
+        setErrorMessage('No matrix experiments available to download.')
+        return
+      }
+
+      const zip = new JSZip()
+      let fileCount = 0
+
+      for (const experiment of matrixExperiments) {
+        try {
+          fileCount += await appendExperimentCsvToZip(experiment, zip)
+        } catch {
+          continue
+        }
+      }
+
+      if (fileCount === 0) {
+        setErrorMessage('No results.csv files found for the matrix.')
+        return
+      }
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      saveAs(zipBlob, 'matrix-iterations-results-csv.zip')
+    } catch {
+      setErrorMessage(`Unable to build matrix zip on port ${activeApiPort}.`)
+    } finally {
+      setBusyMatrixDownload(false)
     }
   }
 
@@ -903,8 +1100,8 @@ function App() {
     async function fetchPortIdentity(port) {
       try {
         const [llmResponse, gpuResponse] = await Promise.all([
-          fetchJson('/api/llm-name', port),
-          fetchJson('/api/gpu-used', port),
+          fetchJson('/api/llm-name', port, { resultsScope: selectedResultsScope }),
+          fetchJson('/api/gpu-used', port, { resultsScope: selectedResultsScope }),
         ])
 
         return {
@@ -957,7 +1154,7 @@ function App() {
       isCancelled = true
       clearInterval(timer)
     }
-  }, [visiblePorts])
+  }, [visiblePorts, selectedResultsScope])
 
   function getTunnelTone(tunnel) {
     if (!tunnelState.reachable) {
@@ -1072,18 +1269,46 @@ function App() {
         <aside className="experiment-panel">
           <div className="experiment-panel-header">
             <h2>Experiments Matrix</h2>
-            <button
-              type="button"
-              className="icon-button"
-              onClick={() => selectedExperiment && downloadExperimentCsvZip(selectedExperiment)}
-              title="Download selected experiment CSV zip"
-              aria-label="Download selected experiment zip"
-              disabled={!selectedExperiment || busyExperimentDownload === selectedExperiment}
-            >
-              <Download size={16} />
-            </button>
+            <div className="button-group">
+              <button
+                type="button"
+                className="icon-button"
+                onClick={downloadMatrixCsvZip}
+                title="Download matrix CSV zip"
+                aria-label="Download matrix CSV zip"
+                disabled={matrixExperiments.length === 0 || busyMatrixDownload}
+              >
+                <Download size={16} />
+              </button>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => selectedExperiment && downloadExperimentCsvZip(selectedExperiment)}
+                title="Download selected cell CSV zip"
+                aria-label="Download selected cell CSV zip"
+                disabled={!selectedExperiment || busyExperimentDownload === selectedExperiment}
+              >
+                <FileDown size={16} />
+              </button>
+            </div>
           </div>
-          <p className="matrix-helper">Rows: input intervals. Columns: output intervals.</p>
+          <div className="results-scope-picker">
+            <label htmlFor="results-scope-select">Results source</label>
+            <select
+              id="results-scope-select"
+              value={selectedResultsScope}
+              onChange={(event) => setSelectedResultsScope(event.target.value)}
+            >
+              {resultsScopeOptions.map((scope) => (
+                <option key={`scope-${scope}`} value={scope}>
+                  {formatResultsScopeLabel(scope)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="matrix-helper">
+            Rows: input intervals. Columns: output intervals. Cells show absolute (top) and inverse-normalized (bottom) values.
+          </p>
 
           {matrixModel.inputRanges.length === 0 || matrixModel.outputRanges.length === 0 ? (
             <p className="placeholder">No interval-pair experiments found.</p>
@@ -1106,18 +1331,25 @@ function App() {
                       const status = experiment ? experimentStatuses[experiment] : null
                       const isSelected = experiment === selectedExperiment
                       const hasValue = Number.isFinite(status?.largestTrue)
+                      const absoluteValue = hasValue ? status.largestTrue : null
+                      const inverseNormalizedValue = hasValue
+                        ? getInverseNormalizedValue(status.largestTrue)
+                        : null
+                      const absoluteText = absoluteValue !== null ? formatMatrixValue(absoluteValue) : ''
+                      const inverseText = hasValue
+                        ? inverseNormalizedValue === null
+                          ? 'n/a'
+                          : formatMatrixValue(inverseNormalizedValue)
+                        : ''
 
                       let backgroundColor = '#ffffff'
-                      let text = ''
                       let tone = 'empty'
 
                       if (status?.hasResults && !status?.finished) {
                         backgroundColor = '#ffd1e3'
-                        text = hasValue ? String(Math.round(status.largestTrue)) : ''
                         tone = 'pending'
                       } else if (status?.hasResults && status?.finished) {
-                        backgroundColor = getHeatmapColor(status.largestTrue, heatScale.min, heatScale.max)
-                        text = hasValue ? String(Math.round(status.largestTrue)) : ''
+                        backgroundColor = getHeatmapColor(absoluteValue, heatScale.min, heatScale.max)
                         tone = 'finished'
                       }
 
@@ -1127,12 +1359,14 @@ function App() {
                           type="button"
                           className={`matrix-cell ${isSelected ? 'is-selected' : ''}`}
                           data-tone={tone}
-                          style={{ backgroundColor }}
+                          style={{ backgroundColor, color: getTextColorForBackground(backgroundColor) }}
                           onClick={() => experiment && setSelectedExperiment(experiment)}
                           disabled={!experiment}
                           title={experiment || 'No experiment mapped for this pair'}
                         >
-                          <span>{text}</span>
+                          <span className="matrix-cell-values">
+                            <span className="matrix-cell-subvalue">{inverseText}</span>
+                          </span>
                         </button>
                       )
                     })}
