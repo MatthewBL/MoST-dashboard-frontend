@@ -143,8 +143,16 @@ https://YOUR_DOMAIN/MoST-dashboard
 The reverse proxy redirects `/MoST-dashboard` to `/MoST-dashboard/` so the
 browser receives the canonical path. A complete Nginx example is provided at
 [`deploy/nginx.conf.example`](deploy/nginx.conf.example). Install it on the
-public machine, replace `YOUR_DOMAIN`, and configure TLS for the domain. Do
-not expose port `4173` directly; it is only the upstream port used by Nginx.
+public machine, replace `YOUR_DOMAIN`, and set the TLS certificate paths. The
+locations must be inside the HTTPS virtual host (`listen 443 ssl`), because the
+public URL uses HTTPS. Then validate and reload Nginx:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Do not expose port `4173` directly; it is only the upstream port used by Nginx.
 After changing the public path or environment values, run `npm run build` again.
 
 Before `npm run build`, create `.env` on that machine. The tunnel manager also
