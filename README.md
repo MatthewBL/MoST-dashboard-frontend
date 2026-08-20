@@ -130,11 +130,17 @@ npm run build
 npm start
 ```
 
-`npm start` listens on all interfaces at port `4173`, so the dashboard URL is:
+The dashboard is built with the public base path `/MoST-dashboard/`. `npm start`
+listens on all interfaces at port `4173`, so the direct URL is:
 
 ```text
-http://SERVER_IP:4173
+http://SERVER_IP:4173/MoST-dashboard/
 ```
+
+For a public domain, configure the web server or reverse proxy to forward
+`/MoST-dashboard/` to `http://127.0.0.1:4173`. Redirect
+`/MoST-dashboard` to `/MoST-dashboard/` so relative asset URLs resolve correctly.
+After changing the public path or environment values, run `npm run build` again.
 
 Before `npm run build`, create `.env.production` on that machine. Replace
 `SERVER_IP` with its LAN or DNS address:
@@ -152,11 +158,14 @@ TUNNEL_MANAGER_BIND=0.0.0.0
 TUNNEL_MANAGER_PORT=4100
 ```
 
-The API and manager ports must be reachable from the users' browsers. Open
-ports `4173`, `4000-4002`, and `4100` in the machine firewall, or place them
-behind a reverse proxy. Restrict those ports to the required network rather
-than exposing them to the whole internet. If the API already has a public
-HTTPS URL, use that URL for `VITE_API_BASE_URL` and omit the SSH tunnel settings.
+The API and manager URLs must be reachable from users' browsers. For a public
+HTTPS site, use public HTTPS hostnames in `VITE_API_BASE_URL` and
+`VITE_TUNNEL_MANAGER_URL`; do not use `localhost` or private IP addresses.
+Those hostnames must proxy to the API and manager, with CORS enabled for the
+dashboard origin. Because the dashboard can switch between API ports, each
+configured API port (`4000-4002`) must also be publicly reachable or be exposed
+through the corresponding reverse-proxy route. Restrict access to the required
+network and avoid exposing the SSH manager directly to the whole internet.
 
 Do not use `npm run dev` for this deployment: it starts the development server
 and the SSH tunnel manager together, and the `-k` behavior stops both when SSH
