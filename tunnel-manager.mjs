@@ -146,6 +146,7 @@ function buildBaseConfig(values) {
     sshConfigFile: values.REMOTE_TUNNEL_SSH_CONFIG_FILE || '',
     extraArgs: values.REMOTE_TUNNEL_EXTRA_ARGS || '',
     managerPort: Number(values.TUNNEL_MANAGER_PORT || 4100),
+    managerBind: values.TUNNEL_MANAGER_BIND || '127.0.0.1',
   }
 }
 
@@ -510,8 +511,8 @@ async function main() {
     })
   })
 
-  server.listen(config.managerPort, () => {
-    console.log(`Tunnel manager listening on http://localhost:${config.managerPort}`)
+  server.listen(config.managerPort, config.managerBind, () => {
+    console.log(`Tunnel manager listening on http://${config.managerBind}:${config.managerPort}`)
     console.log(`Managed ports: ${config.ports.join(', ')}`)
   })
 

@@ -117,3 +117,49 @@ npm run dev
 npm run build
 npm run preview
 ```
+
+## Deploy on an External Machine
+
+The frontend is a static Vite build. The machine hosting it must also be able to
+reach the MoST-API, either directly or through the SSH tunnel manager. Run these
+commands on the external machine:
+
+```bash
+npm ci
+npm run build
+npm start
+```
+
+`npm start` listens on all interfaces at port `4173`, so the dashboard URL is:
+
+```text
+http://SERVER_IP:4173
+```
+
+Before `npm run build`, create `.env.production` on that machine. Replace
+`SERVER_IP` with its LAN or DNS address:
+
+```env
+VITE_API_BASE_URL=http://SERVER_IP:4000
+VITE_TUNNEL_MANAGER_URL=http://SERVER_IP:4100
+VITE_API_PORTS=4000,4001,4002
+
+REMOTE_TUNNEL_HOST=c06
+REMOTE_TUNNEL_USER=matbwyler@172.16.46.6
+REMOTE_TUNNEL_PORTS=4000,4001,4002
+LOCAL_TUNNEL_BIND=0.0.0.0
+TUNNEL_MANAGER_BIND=0.0.0.0
+TUNNEL_MANAGER_PORT=4100
+```
+
+The API and manager ports must be reachable from the users' browsers. Open
+ports `4173`, `4000-4002`, and `4100` in the machine firewall, or place them
+behind a reverse proxy. Restrict those ports to the required network rather
+than exposing them to the whole internet. If the API already has a public
+HTTPS URL, use that URL for `VITE_API_BASE_URL` and omit the SSH tunnel settings.
+
+Do not use `npm run dev` for this deployment: it starts the development server
+and the SSH tunnel manager together, and the `-k` behavior stops both when SSH
+fails. Use `npm run dev:web` for frontend-only local troubleshooting, or run
+`npm run dev:tunnel` separately to diagnose SSH authentication, host, and port
+forwarding problems.

@@ -1365,7 +1365,8 @@ function App() {
                           title={experiment || 'No experiment mapped for this pair'}
                         >
                           <span className="matrix-cell-values">
-                            <span className="matrix-cell-subvalue">{inverseText}</span>
+                            <span className="matrix-cell-subvalue">MST: {absoluteText}</span>
+                            <span className="matrix-cell-subvalue">&sigma;: {inverseText}</span>
                           </span>
                         </button>
                       )
