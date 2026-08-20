@@ -131,19 +131,24 @@ npm start
 ```
 
 The dashboard is built with the public base path `/MoST-dashboard/`. `npm start`
-listens on all interfaces at port `4173`, so the direct URL is:
+listens on the internal application port `4173`; that port is not part of the
+public URL when a reverse proxy is configured.
+
+The public URL is:
 
 ```text
-http://SERVER_IP:4173/MoST-dashboard/
+https://YOUR_DOMAIN/MoST-dashboard
 ```
 
-For a public domain, configure the web server or reverse proxy to forward
-`/MoST-dashboard/` to `http://127.0.0.1:4173`. Redirect
-`/MoST-dashboard` to `/MoST-dashboard/` so relative asset URLs resolve correctly.
+The reverse proxy redirects `/MoST-dashboard` to `/MoST-dashboard/` so the
+browser receives the canonical path. A complete Nginx example is provided at
+[`deploy/nginx.conf.example`](deploy/nginx.conf.example). Install it on the
+public machine, replace `YOUR_DOMAIN`, and configure TLS for the domain. Do
+not expose port `4173` directly; it is only the upstream port used by Nginx.
 After changing the public path or environment values, run `npm run build` again.
 
-Before `npm run build`, create `.env.production` on that machine. Replace
-`SERVER_IP` with its LAN or DNS address:
+Before `npm run build`, create `.env` on that machine. The tunnel manager also
+reads this file when `npm run dev:tunnel` starts, so keep the SSH settings there:
 
 ```env
 VITE_API_BASE_URL=http://127.0.0.1:4000
@@ -157,31 +162,6 @@ REMOTE_TUNNEL_PORTS=4000,4001,4002
 LOCAL_TUNNEL_BIND=127.0.0.1
 TUNNEL_MANAGER_BIND=127.0.0.1
 TUNNEL_MANAGER_PORT=4100
-```
-
-The browser only accesses the public dashboard domain. Configure the reverse
-proxy on that machine to keep the API and manager private:
-
-```nginx
-location /MoST-dashboard/ {
-	proxy_pass http://127.0.0.1:4173;
-}
-
-location /most-api/4000/ {
-	proxy_pass http://127.0.0.1:4000/;
-}
-
-location /most-api/4001/ {
-	proxy_pass http://127.0.0.1:4001/;
-}
-
-location /most-api/4002/ {
-	proxy_pass http://127.0.0.1:4002/;
-}
-
-location /most-tunnel/ {
-	proxy_pass http://127.0.0.1:4100/;
-}
 ```
 
 With that configuration, users access only:

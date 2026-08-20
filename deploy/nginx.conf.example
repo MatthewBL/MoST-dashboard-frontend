@@ -1,0 +1,52 @@
+# Replace YOUR_DOMAIN with the real public DNS name and install this in Nginx.
+# Keep ports 4173, 4000-4002, and 4100 bound to 127.0.0.1.
+
+server {
+    listen 80;
+    server_name YOUR_DOMAIN;
+
+    location = /MoST-dashboard {
+        return 301 /MoST-dashboard/;
+    }
+
+    location /MoST-dashboard/ {
+        proxy_pass http://127.0.0.1:4173;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /most-api/4000/ {
+        proxy_pass http://127.0.0.1:4000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /most-api/4001/ {
+        proxy_pass http://127.0.0.1:4001/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /most-api/4002/ {
+        proxy_pass http://127.0.0.1:4002/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /most-tunnel/ {
+        proxy_pass http://127.0.0.1:4100/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
