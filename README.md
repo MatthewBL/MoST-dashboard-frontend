@@ -146,26 +146,54 @@ Before `npm run build`, create `.env.production` on that machine. Replace
 `SERVER_IP` with its LAN or DNS address:
 
 ```env
-VITE_API_BASE_URL=http://SERVER_IP:4000
-VITE_TUNNEL_MANAGER_URL=http://SERVER_IP:4100
+VITE_API_BASE_URL=http://127.0.0.1:4000
+VITE_API_PROXY_PATH=/most-api
+VITE_TUNNEL_MANAGER_URL=/most-tunnel
 VITE_API_PORTS=4000,4001,4002
 
 REMOTE_TUNNEL_HOST=c06
 REMOTE_TUNNEL_USER=matbwyler@172.16.46.6
 REMOTE_TUNNEL_PORTS=4000,4001,4002
-LOCAL_TUNNEL_BIND=0.0.0.0
-TUNNEL_MANAGER_BIND=0.0.0.0
+LOCAL_TUNNEL_BIND=127.0.0.1
+TUNNEL_MANAGER_BIND=127.0.0.1
 TUNNEL_MANAGER_PORT=4100
 ```
 
-The API and manager URLs must be reachable from users' browsers. For a public
-HTTPS site, use public HTTPS hostnames in `VITE_API_BASE_URL` and
-`VITE_TUNNEL_MANAGER_URL`; do not use `localhost` or private IP addresses.
-Those hostnames must proxy to the API and manager, with CORS enabled for the
-dashboard origin. Because the dashboard can switch between API ports, each
-configured API port (`4000-4002`) must also be publicly reachable or be exposed
-through the corresponding reverse-proxy route. Restrict access to the required
-network and avoid exposing the SSH manager directly to the whole internet.
+The browser only accesses the public dashboard domain. Configure the reverse
+proxy on that machine to keep the API and manager private:
+
+```nginx
+location /MoST-dashboard/ {
+	proxy_pass http://127.0.0.1:4173;
+}
+
+location /most-api/4000/ {
+	proxy_pass http://127.0.0.1:4000/;
+}
+
+location /most-api/4001/ {
+	proxy_pass http://127.0.0.1:4001/;
+}
+
+location /most-api/4002/ {
+	proxy_pass http://127.0.0.1:4002/;
+}
+
+location /most-tunnel/ {
+	proxy_pass http://127.0.0.1:4100/;
+}
+```
+
+With that configuration, users access only:
+
+```text
+https://YOUR_DOMAIN/MoST-dashboard/
+```
+
+The SSH tunnels are created by `npm run dev:tunnel` on the public machine, not
+by users' computers. Run it as a service alongside `npm start`, and ensure the
+machine's SSH key can authenticate to the gateway without an interactive
+terminal prompt.
 
 Do not use `npm run dev` for this deployment: it starts the development server
 and the SSH tunnel manager together, and the `-k` behavior stops both when SSH

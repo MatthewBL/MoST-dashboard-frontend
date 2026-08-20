@@ -16,6 +16,7 @@ import './App.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000'
 const TUNNEL_MANAGER_URL = import.meta.env.VITE_TUNNEL_MANAGER_URL || 'http://localhost:4100'
+const API_PROXY_PATH = import.meta.env.VITE_API_PROXY_PATH || ''
 const API_PORTS_RAW = import.meta.env.VITE_API_PORTS || ''
 const EXPERIMENT_LIST_RAW =
   import.meta.env.VITE_EXPERIMENT_LIST || import.meta.env.EXPERIMENT_LIST || ''
@@ -200,6 +201,11 @@ function extractModelName(llmResponse) {
 }
 
 function buildApiBaseUrlForPort(port) {
+  if (API_PROXY_PATH) {
+    const proxyPath = API_PROXY_PATH.replace(/\/$/, '')
+    return `${window.location.origin}${proxyPath}/${port}`
+  }
+
   try {
     const url = new URL(API_BASE_URL)
     url.port = String(port)
@@ -225,7 +231,14 @@ function buildApiUrl(pathname, port, queryParams = {}) {
 }
 
 function buildTunnelUrl(pathname) {
-  return `${TUNNEL_MANAGER_URL}${pathname}`
+  const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`
+  const baseUrl = TUNNEL_MANAGER_URL.replace(/\/$/, '')
+
+  if (baseUrl.startsWith('/')) {
+    return `${window.location.origin}${baseUrl}${normalizedPath}`
+  }
+
+  return `${baseUrl}${normalizedPath}`
 }
 
 function parseExperimentPair(experimentName) {
