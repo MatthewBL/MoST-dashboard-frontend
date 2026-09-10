@@ -11,7 +11,7 @@ import {
 } from 'recharts'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
-import { Download, FileDown, RotateCcw } from 'lucide-react'
+import { Download, FileDown, RefreshCw, RotateCcw, Terminal } from 'lucide-react'
 import './App.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000'
@@ -417,6 +417,25 @@ async function fetchExperimentIterations(experimentName, port, resultsScope) {
   return sortIterationsChronologically(data.iterations || [])
 }
 
+async function fetchExperimentStatusForPort(port) {
+  try {
+    const data = await fetchJson('/api/experiment-status', port)
+    return {
+      isRunning: data.isRunning ?? null,
+      slurmJobId: data.slurmJobId || null,
+      logFile: data.logFile || null,
+      logAvailable: Boolean(data.logAvailable),
+    }
+  } catch {
+    return {
+      isRunning: null,
+      slurmJobId: null,
+      logFile: null,
+      logAvailable: false,
+    }
+  }
+}
+
 function CustomNode({ cx, cy, payload, onHover, onHoverEnd, onSelect }) {
   if (!payload || cx === undefined || cy === undefined) {
     return null
@@ -513,6 +532,13 @@ function App() {
   })
   const [tunnelBusyByPort, setTunnelBusyByPort] = useState({})
   const [portIdentityByPort, setPortIdentityByPort] = useState({})
+  const [experimentStatusByPort, setExperimentStatusByPort] = useState({})
+  const [logVisible, setLogVisible] = useState(false)
+  const [logContent, setLogContent] = useState('')
+  const [logMeta, setLogMeta] = useState(null)
+  const [logLoading, setLogLoading] = useState(false)
+  const [logError, setLogError] = useState('')
+  const [logReloadKey, setLogReloadKey] = useState(0)
 
   useEffect(() => {
     let isMounted = true
@@ -1131,6 +1157,21 @@ function App() {
       }
     }
 
+    async function refreshPortStatuses() {
+      const statusEntries = await Promise.all(
+        visiblePorts.map(async (port) => [port, await fetchExperimentStatusForPort(port)]),
+      )
+
+      if (isCancelled) {
+        return
+      }
+
+      setExperimentStatusByPort((previous) => ({
+        ...previous,
+        ...Object.fromEntries(statusEntries),
+      }))
+    }
+
     async function refreshPortIdentities() {
       const entries = await Promise.all(
         visiblePorts.map(async (port) => [port, await fetchPortIdentity(port)]),
@@ -1160,14 +1201,83 @@ function App() {
       return next
     })
 
+    setExperimentStatusByPort((previous) => {
+      const next = { ...previous }
+      for (const port of visiblePorts) {
+        if (!next[port]) {
+          next[port] = {
+            isRunning: null,
+            slurmJobId: null,
+            logFile: null,
+            logAvailable: false,
+          }
+        }
+      }
+      return next
+    })
+
+    refreshPortStatuses()
     refreshPortIdentities()
-    const timer = setInterval(refreshPortIdentities, 20000)
+    const timer = setInterval(() => {
+      refreshPortStatuses()
+      refreshPortIdentities()
+    }, 20000)
 
     return () => {
       isCancelled = true
       clearInterval(timer)
     }
   }, [visiblePorts, selectedResultsScope])
+
+  useEffect(() => {
+    if (!logVisible) {
+      return
+    }
+
+    let isCancelled = false
+
+    async function loadLog() {
+      setLogLoading(true)
+      setLogError('')
+
+      try {
+        const data = await fetchJson('/api/experiment-log', activeApiPort, { lines: 100 })
+        if (isCancelled) {
+          return
+        }
+
+        setLogContent(data.content || '')
+        setLogMeta({
+          slurmJobId: data.slurmJobId || null,
+          logFile: data.logFile || null,
+          logPath: data.logPath || null,
+          truncated: Boolean(data.truncated),
+          returnedLines: data.returnedLines ?? null,
+          requestedLines: data.requestedLines ?? null,
+        })
+      } catch {
+        if (isCancelled) {
+          return
+        }
+
+        setLogContent('')
+        setLogMeta(null)
+        setLogError(
+          `Unable to load the log file from port ${activeApiPort}. The API or the slurm log may be unreachable.`,
+        )
+      } finally {
+        if (!isCancelled) {
+          setLogLoading(false)
+        }
+      }
+    }
+
+    loadLog()
+
+    return () => {
+      isCancelled = true
+    }
+  }, [logVisible, activeApiPort, logReloadKey])
 
   function getTunnelTone(tunnel) {
     if (!tunnelState.reachable) {
@@ -1201,6 +1311,16 @@ function App() {
     return 'Tunnel stopped'
   }
 
+  function getExperimentStatusLabel(status) {
+    if (status?.isRunning === true) {
+      return status.slurmJobId ? `Running (job ${status.slurmJobId})` : 'Running'
+    }
+    if (status?.isRunning === false) {
+      return 'Stopped'
+    }
+    return 'Unknown'
+  }
+
   return (
     <div className="dashboard-shell">
       <header className="dashboard-header">
@@ -1232,6 +1352,12 @@ function App() {
               gpu: 'Loading...',
               modelUrl: 'Loading...',
             }
+            const experimentStatus = experimentStatusByPort[port] || {
+              isRunning: null,
+              slurmJobId: null,
+              logFile: null,
+              logAvailable: false,
+            }
 
             return (
               <div
@@ -1254,6 +1380,19 @@ function App() {
                   <strong>{`Model: ${identity.llm}`}</strong>
                   <p className="tunnel-model">GPU used: {identity.gpu}</p>
                   <p>{getTunnelLabel(tunnel)} (Port {port})</p>
+                  <p className="experiment-status">
+                    <span
+                      className={`status-bubble ${
+                        experimentStatus.isRunning === true
+                          ? 'is-running'
+                          : experimentStatus.isRunning === false
+                          ? 'is-stopped'
+                          : 'is-unknown'
+                      }`}
+                      aria-hidden="true"
+                    />
+                    {getExperimentStatusLabel(experimentStatus)}
+                  </p>
                 </div>
                 <div className="tunnel-card-actions">
                   <button
@@ -1533,6 +1672,62 @@ function App() {
             </table>
           )}
         </div>
+      </section>
+
+      <section className="log-panel">
+        <div className="log-panel-header">
+          <div>
+            <h2>Job Log</h2>
+            {logLoading ? (
+              <p>Loading the latest log...</p>
+            ) : logMeta || logContent || logError ? (
+              <p>
+                {logMeta
+                  ? `${logMeta.logFile || 'slurm log'} (job ${logMeta.slurmJobId ?? '?'})${
+                      logMeta.truncated ? ' · last 100 lines (truncated)' : ''
+                    }`
+                  : logError || 'No log file available.'}
+              </p>
+            ) : (
+              <p>Display the latest slurm log file for the active API.</p>
+            )}
+          </div>
+          <div className="log-actions">
+            <button
+              type="button"
+              className="log-toggle-button"
+              onClick={() => setLogVisible((previous) => !previous)}
+              aria-expanded={logVisible}
+            >
+              <Terminal size={16} />
+              {logVisible ? 'Hide log' : 'View log'}
+            </button>
+            {logVisible && (
+              <button
+                type="button"
+                className="log-refresh-button"
+                onClick={() => setLogReloadKey((previous) => previous + 1)}
+                disabled={logLoading}
+                title="Reload the latest log"
+              >
+                <RefreshCw size={16} />
+                Reload
+              </button>
+            )}
+          </div>
+        </div>
+
+        {logVisible && (
+          <div className="log-view">
+            {logLoading ? (
+              <p className="placeholder">Loading log...</p>
+            ) : logError ? (
+              <p className="placeholder">{logError}</p>
+            ) : (
+              <pre className="log-content">{logContent || 'The log file is empty.'}</pre>
+            )}
+          </div>
+        )}
       </section>
     </div>
   )

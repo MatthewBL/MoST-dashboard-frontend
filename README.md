@@ -22,6 +22,8 @@ Frontend dashboard for visualizing experiment data served by MoST-API.
 - Tunnel status strip in the frontend with per-port controls:
 	- switch active API source per port
 	- restart each tunnel independently
+- Per-port experiment run status shown on each API card (green bubble with "Running" when the latest slurm job is active on `squeue`, orange bubble with "Stopped" when it is not)
+- Log viewer at the very bottom of the screen: pressing "View log" shows the last 100 lines of the latest `slurm-*.out` log via `GET /api/experiment-log?lines=100`, with a manual "Reload" button
 
 ## Install
 
