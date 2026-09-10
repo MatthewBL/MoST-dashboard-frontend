@@ -371,7 +371,7 @@ function getTextColorForBackground(bg) {
         r = Number(nums[0]); g = Number(nums[1]); b = Number(nums[2])
       }
     }
-  } catch (e) {
+  } catch {
     return '#000000'
   }
 
