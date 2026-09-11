@@ -200,6 +200,53 @@ function extractModelName(llmResponse) {
   return found ? String(found).trim() : 'Unknown model'
 }
 
+const MODEL_USED_KEYS = ['MODEL_USED', 'Model used', 'model_used', 'MODEL', 'model']
+const MODEL_URL_KEYS = ['URL', 'url', 'Url', 'endpoint', 'model_url']
+
+function parseEndpointFromUrl(rawUrl) {
+  const cleaned = String(rawUrl || '')
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+  if (!cleaned) {
+    return null
+  }
+
+  let candidate = cleaned
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(candidate)) {
+    candidate = `http://${candidate}`
+  }
+
+  try {
+    const parsed = new URL(candidate)
+    const hostname = parsed.hostname
+    if (!hostname) {
+      return null
+    }
+
+    const rawPort = parsed.port ? Number(parsed.port) : null
+    if (rawPort === null || !Number.isInteger(rawPort) || rawPort <= 0) {
+      return null
+    }
+
+    const isIpAddress = /^\d+\.\d+\.\d+\.\d+$/.test(hostname)
+    const node = isIpAddress ? hostname : hostname.split('.')[0]
+
+    return { node, port: rawPort }
+  } catch {
+    return null
+  }
+}
+
+function formatGpuCount(value) {
+  if (typeof value === 'number') {
+    return String(value)
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return value
+  }
+  return 'Unavailable'
+}
+
 function buildApiBaseUrlForPort(port) {
   if (API_PROXY_PATH) {
     const proxyPath = API_PROXY_PATH.replace(/\/$/, '')
@@ -434,6 +481,76 @@ async function fetchExperimentStatusForPort(port) {
       logAvailable: false,
     }
   }
+}
+
+async function resolveModelEndpointForPort(port, resultsScope, envModelUrl) {
+  const fromEnv = parseEndpointFromUrl(envModelUrl)
+  if (fromEnv) {
+    return { node: fromEnv.node, port: fromEnv.port, model: null }
+  }
+
+  try {
+    const current = await fetchJson('/api/current-experiment', port, { resultsScope })
+    const experiment = current?.experiment
+    const iteration = current?.iteration
+    if (!experiment || !iteration) {
+      return null
+    }
+
+    const csv = await fetchJson(
+      `/api/experiments/${encodeURIComponent(experiment)}/iterations/${encodeURIComponent(iteration)}/results.csv`,
+      port,
+      { resultsScope },
+    )
+
+    for (const row of csv.rows || []) {
+      const endpoint = parseEndpointFromUrl(getFieldValue(row, MODEL_URL_KEYS))
+      if (endpoint) {
+        return {
+          node: endpoint.node,
+          port: endpoint.port,
+          model: getFieldValue(row, MODEL_USED_KEYS),
+        }
+      }
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
+async function fetchGpuCountForPort(port, resultsScope, modelUrl, fallbackModelId) {
+  const endpoint = await resolveModelEndpointForPort(port, resultsScope, modelUrl)
+  if (!endpoint) {
+    return null
+  }
+
+  const modelCandidates = [endpoint.model, fallbackModelId].filter(
+    (value) => value !== null && value !== undefined && String(value).trim() !== '',
+  )
+
+  for (const model of modelCandidates) {
+    try {
+      const data = await fetchJson('/api/job-gpu-count', port, {
+        model,
+        node: endpoint.node,
+        port: endpoint.port,
+      })
+
+      const rawCount = data?.gpuCount
+      if (rawCount === undefined || rawCount === null) {
+        return null
+      }
+
+      const numeric = Number(rawCount)
+      return Number.isInteger(numeric) && numeric >= 0 ? numeric : null
+    } catch {
+      // A non-matching model yields 404 JOB_NOT_FOUND; try the next candidate.
+    }
+  }
+
+  return null
 }
 
 function CustomNode({ cx, cy, payload, onHover, onHoverEnd, onSelect }) {
@@ -1143,16 +1260,27 @@ function App() {
           fetchJson('/api/gpu-used', port, { resultsScope: selectedResultsScope }),
         ])
 
+        const llm = extractModelName(llmResponse)
+        const modelUrl = extractModelUrl(gpuResponse)
+        const gpuCount = await fetchGpuCountForPort(
+          port,
+          selectedResultsScope,
+          modelUrl,
+          llm,
+        )
+
         return {
-          llm: extractModelName(llmResponse),
+          llm,
           gpu: extractGpuUsed(gpuResponse),
-          modelUrl: extractModelUrl(gpuResponse),
+          modelUrl,
+          gpuCount,
         }
       } catch {
         return {
           llm: 'Unavailable',
           gpu: 'Unavailable',
           modelUrl: 'Unavailable',
+          gpuCount: null,
         }
       }
     }
@@ -1195,6 +1323,7 @@ function App() {
             llm: 'Loading...',
             gpu: 'Loading...',
             modelUrl: 'Loading...',
+            gpuCount: 'Loading...',
           }
         }
       }
@@ -1351,6 +1480,7 @@ function App() {
               llm: 'Loading...',
               gpu: 'Loading...',
               modelUrl: 'Loading...',
+              gpuCount: 'Loading...',
             }
             const experimentStatus = experimentStatusByPort[port] || {
               isRunning: null,
@@ -1379,6 +1509,7 @@ function App() {
                 <div className="tunnel-card-meta">
                   <strong>{`Model: ${identity.llm}`}</strong>
                   <p className="tunnel-model">GPU used: {identity.gpu}</p>
+                  <p className="tunnel-gpu-count">GPUs: {formatGpuCount(identity.gpuCount)}</p>
                   <p>{getTunnelLabel(tunnel)} (Port {port})</p>
                   <p className="experiment-status">
                     <span

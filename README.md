@@ -23,6 +23,7 @@ Frontend dashboard for visualizing experiment data served by MoST-API.
 	- switch active API source per port
 	- restart each tunnel independently
 - Per-port experiment run status shown on each API card (green bubble with "Running" when the latest slurm job is active on `squeue`, orange bubble with "Stopped" when it is not)
+- Per-card GPU count: each API card calls `GET /api/job-gpu-count?model=MODEL_ID&node=NODE&port=PORT` and shows how many GPUs the model's serving job uses (`GPUs: N`). The model, node and port are resolved from the MoST project `.env` model URL (surfaced by `GET /api/gpu-used`), falling back to the `URL`/`MODEL_USED` columns of the latest `results.csv` when no env URL is available.
 - Log viewer at the very bottom of the screen: pressing "View log" shows the last 100 lines of the latest `slurm-*.out` log via `GET /api/experiment-log?lines=100`, with a manual "Reload" button
 
 ## Install

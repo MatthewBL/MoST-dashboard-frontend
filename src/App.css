@@ -139,6 +139,11 @@
   font-weight: 700;
 }
 
+.tunnel-gpu-count {
+  color: #12397f;
+  font-weight: 600;
+}
+
 .tunnel-card-actions {
   display: flex;
   gap: 0.45rem;
