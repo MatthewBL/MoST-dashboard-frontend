@@ -7,6 +7,7 @@ Frontend dashboard for visualizing experiment data served by MoST-API.
 - Header with LLM name and GPU used (fetched from API)
 - Experiment list on the left with selection highlight
 - Per-experiment ZIP download including only `results.csv` files, preserving iteration folder structure
+- `EXPERIMENT_TYPE` from `results.csv` is shown in the Experiments Matrix title, the chart title, and as the prefix of the absolute value of each matrix cell (for example `MST Experiments Matrix`, `MST · 1-100/1-100`, `MST: 256`). When the field is missing from a `results.csv` that has results, it defaults to `MST`; when an experiment has no results, no type is displayed and the titles stay unchanged.
 - Line chart in the center:
 	- X axis: iteration count
 	- Y axis: requests sent per minute

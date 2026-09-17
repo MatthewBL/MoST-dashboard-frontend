@@ -57,7 +57,14 @@ const LARGEST_TRUE_KEYS = [
   'largestTrue',
   'CURRENT_LARGEST_TRUE',
 ]
+const EXPERIMENT_TYPE_KEYS = [
+  'EXPERIMENT_TYPE',
+  'Experiment type',
+  'experiment_type',
+  'experimentType',
+]
 const DEFAULT_RESULTS_SCOPE = 'current'
+const DEFAULT_EXPERIMENT_TYPE = 'MST'
 
 function parsePortToken(token) {
   const numeric = Number(String(token || '').trim())
@@ -362,6 +369,11 @@ function formatExperimentLabel(experimentName) {
   }
 
   return experimentName.replace('_', '/')
+}
+
+function formatExperimentType(value) {
+  const normalized = value === null || value === undefined ? '' : String(value).trim()
+  return normalized || DEFAULT_EXPERIMENT_TYPE
 }
 
 function formatResultsScopeLabel(scope) {
@@ -814,6 +826,7 @@ function App() {
                     hasResults: false,
                     finished: false,
                     largestTrue: null,
+                    experimentType: null,
                   },
                 ]
               }
@@ -834,6 +847,7 @@ function App() {
                     hasResults: false,
                     finished: false,
                     largestTrue: null,
+                    experimentType: null,
                   },
                 ]
               }
@@ -847,6 +861,9 @@ function App() {
                   hasResults: true,
                   finished,
                   largestTrue,
+                  experimentType: formatExperimentType(
+                    getFieldValue(latestRow, EXPERIMENT_TYPE_KEYS),
+                  ),
                 },
               ]
             } catch {
@@ -856,6 +873,7 @@ function App() {
                   hasResults: false,
                   finished: false,
                   largestTrue: null,
+                  experimentType: null,
                 },
               ]
             }
@@ -929,6 +947,9 @@ function App() {
               successLabel: formatSuccessRate(successRaw),
               stage1ReqMin: stage === 1 ? reqMin : null,
               stage2ReqMin: stage === 2 ? reqMin : null,
+              experimentType: formatExperimentType(
+                getFieldValue(firstRow, EXPERIMENT_TYPE_KEYS),
+              ),
               rows: csv.rows || [],
             }
           }),
@@ -958,6 +979,14 @@ function App() {
   const selectedPoint = useMemo(
     () => iterationData.find((point) => point.iteration === selectedIteration) || null,
     [iterationData, selectedIteration],
+  )
+
+  const selectedExperimentType = useMemo(
+    () =>
+      selectedPoint?.experimentType ||
+      experimentStatuses[selectedExperiment]?.experimentType ||
+      null,
+    [selectedPoint, experimentStatuses, selectedExperiment],
   )
 
   const matrixModel = useMemo(() => {
@@ -999,6 +1028,14 @@ function App() {
     const entries = Object.values(matrixModel.pairMap).filter(Boolean)
     return [...new Set(entries)]
   }, [matrixModel])
+
+  const matrixExperimentType = useMemo(() => {
+    const types = Object.values(experimentStatuses)
+      .map((status) => status?.experimentType)
+      .filter(Boolean)
+
+    return types[0] || null
+  }, [experimentStatuses])
 
   const finishedLargestTrueValues = useMemo(
     () =>
@@ -1551,7 +1588,7 @@ function App() {
       <main className="dashboard-main">
         <aside className="experiment-panel">
           <div className="experiment-panel-header">
-            <h2>Experiments Matrix</h2>
+            <h2>{matrixExperimentType ? `${matrixExperimentType} Experiments Matrix` : 'Experiments Matrix'}</h2>
             <div className="button-group">
               <button
                 type="button"
@@ -1619,6 +1656,9 @@ function App() {
                         ? getInverseNormalizedValue(status.largestTrue)
                         : null
                       const absoluteText = absoluteValue !== null ? formatMatrixValue(absoluteValue) : ''
+                      const cellExperimentType = status?.hasResults
+                        ? status?.experimentType || matrixExperimentType
+                        : null
                       const inverseText = hasValue
                         ? inverseNormalizedValue === null
                           ? 'n/a'
@@ -1648,7 +1688,7 @@ function App() {
                           title={experiment || 'No experiment mapped for this pair'}
                         >
                           <span className="matrix-cell-values">
-                            <span className="matrix-cell-subvalue">MST: {absoluteText}</span>
+                            <span className="matrix-cell-subvalue">{cellExperimentType ? `${cellExperimentType}: ` : ''}{absoluteText}</span>
                             <span className="matrix-cell-subvalue">&sigma;: {inverseText}</span>
                           </span>
                         </button>
@@ -1674,7 +1714,11 @@ function App() {
 
         <section className="chart-panel">
           <div className="chart-header">
-            <h2>{formatExperimentLabel(selectedExperiment)}</h2>
+            <h2>
+              {selectedExperimentType
+                ? `${selectedExperimentType} · ${formatExperimentLabel(selectedExperiment)}`
+                : formatExperimentLabel(selectedExperiment)}
+            </h2>
             <div className="chart-legend">
               <span><i className="dot stage-1" />Stage 1</span>
               <span><i className="dot stage-2" />Stage 2</span>
